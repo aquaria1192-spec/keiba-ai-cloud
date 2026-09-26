@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+from datetime import datetime
+from io import StringIO
+from pathlib import Path
+from zoneinfo import ZoneInfo
+import base64
+import hashlib
+import re
+
+import numpy as np
+import pandas as pd
+import requests
+
+from auto_data_builder import _session, VENUE_CODE, _flatten_columns, _find_col
+from race_day_context import _result_url_from_entry, parse_jra_result_html
+
+BASE = Path(__file__).resolve().parent
+DATA_DIR = BASE / "data"
+LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
+JST = ZoneInfo("Asia/Tokyo")
+
+COLS = [
+    "snapshot_id","recorded_at","app_version",
+    "date","course","race_no","race_name","surface","distance","going",
+    "horse_no","horse_name","mark","rank",
+    "win_prob","top3_prob","base_ai_index","day_adjustment","ai_index",
+    "odds","popularity","body_weight","body_weight_diff",
+    "actual_finish","actual_win","actual_top3","settled_at","result_url",
+]
+
+def blank_history():
+    return pd.DataFrame(columns=COLS)
+
+def norm_history(df):
+    if df is None or len(df)==0:
+        return blank_history()
+    out=df.copy()
+    for c in COLS:
+        if c not in out.columns:
+            out[c]=np.nan
+    return out[COLS]
+
+def secret_get(secrets,key,default=""):
+    try:
+        return secrets[key]
+    except Exception:
+        try:
+            return secrets.get(key,default)
+        except Exception:
+            return default
+
+class HistoryBackend:
+    """
+    Persistent mode writes to a separate GitHub history repository.
+    This deliberately avoids writing to the Streamlit app repository because
+    doing so can trigger a redeploy every time a prediction is recorded.
+    """
+    def __init__(self,secrets=None):
+        self.token=str(secret_get(secrets,"GITHUB_TOKEN","") or "").strip()
+        self.repo=str(secret_get(secrets,"GITHUB_HISTORY_REPO","") or "").strip()
+        self.branch=str(secret_get(secrets,"GITHUB_HISTORY_BRANCH","main") or "main").strip()
+        self.path=str(secret_get(secrets,"GITHUB_HISTORY_PATH","prediction_history.csv") or "prediction_history.csv").strip()
+        self.mode="github" if self.token and self.repo else "local"
+
+    @property
+    def persistent(self):
+        return self.mode=="github"
+
+    @property
+    def label(self):
+        return "履歴専用GitHubへ永続保存" if self.persistent else "一時保存＋CSVバックアップ"
+
+    def headers(self):
+        return {
+            "Authorization":f"Bearer {self.token}",
+            "Accept":"application/vnd.github+json",
+            "X-GitHub-Api-Version":"2022-11-28",
+        }
+
+    def gh_get(self):
+        url=f"https://api.github.com/repos/{self.repo}/contents/{self.path}"
+        r=requests.get(url,headers=self.headers(),params={"ref":self.branch},timeout=20)
+        if r.status_code==404:
+            return blank_history(),None
+        r.raise_for_status()
+        js=r.json()
+        raw=base64.b64decode(js.get("content",""))
+        df=pd.read_csv(StringIO(raw.decode("utf-8-sig")),low_memory=False) if raw else blank_history()
+        return norm_history(df),js.get("sha")
+
+    def load(self):
+        if self.persistent:
+            try:
+                df,_=self.gh_get()
+                return df
+            except Exception:
+                pass
+        if LOCAL_HISTORY.exists():
+            try:
+                return norm_history(pd.read_csv(LOCAL_HISTORY,low_memory=False))
+            except Exception:
+                pass
+        return blank_history()
+
+    def save(self,df):
+        df=norm_history(df)
+        DATA_DIR.mkdir(parents=True,exist_ok=True)
+        df.to_csv(LOCAL_HISTORY,index=False,encoding="utf-8-sig")
+
+        if not self.persistent:
+            return {"mode":"local"}
+
+        _,sha=self.gh_get()
+        raw=df.to_csv(index=False).encode("utf-8-sig")
+        payload={
+            "message":"Update keiba AI evaluation history",
+            "content":base64.b64encode(raw).decode("ascii"),
+            "branch":self.branch,
+        }
+        if sha:
+            payload["sha"]=sha
+        url=f"https://api.github.com/repos/{self.repo}/contents/{self.path}"
+        r=requests.put(url,headers=self.headers(),json=payload,timeout=30)
+        r.raise_for_status()
+        return {"mode":"github"}
+
+    def merge_import(self,df):
+        base=self.load()
+        inc=norm_history(df)
+        out=pd.concat([base,inc],ignore_index=True)
+        out=out.drop_duplicates(["snapshot_id","horse_no"],keep="last")
+        self.save(out)
+        return out
+
+def numtext(v):
+    x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
+    return "" if pd.isna(x) else f"{float(x):.8f}"
+
+def prediction_snapshot(detail,app_version="1.6"):
+    if detail is None or len(detail)==0:
+        return blank_history()
+
+    d=detail.copy().sort_values("horse_no")
+    f=d.iloc[0]
+    date=str(f.get("開催日",f.get("date","")))
+    course=str(f.get("競馬場",f.get("course","")))
+    race_no=str(f.get("レース",f.get("race_no","")))
+    race_name=str(f.get("race_name","")).strip()
+
+    hash_rows=[]
+    for _,r in d.iterrows():
+        hash_rows.append("|".join([
+            str(r.get("horse_no","")),str(r.get("horse_name","")),
+            str(r.get("印","")),numtext(r.get("win_prob")),
+            numtext(r.get("top3_prob")),numtext(r.get("ai_index")),
+            numtext(r.get("odds")),numtext(r.get("body_weight")),
+            str(r.get("going","")),
+        ]))
+    digest=hashlib.sha256("\n".join(hash_rows).encode("utf-8")).hexdigest()[:16]
+    sid=f"{date}|{course}|{race_no}|{digest}"
+    now=datetime.now(JST).isoformat(timespec="seconds")
+
+    rows=[]
+    for _,r in d.iterrows():
+        rows.append({
+            "snapshot_id":sid,"recorded_at":now,"app_version":app_version,
+            "date":date,"course":course,"race_no":race_no,"race_name":race_name,
+            "surface":r.get("surface",""),"distance":r.get("distance",np.nan),
+            "going":r.get("going",""),"horse_no":r.get("horse_no",np.nan),
+            "horse_name":r.get("horse_name",""),"mark":r.get("印",""),
+            "rank":r.get("順位",np.nan),"win_prob":r.get("win_prob",np.nan),
+            "top3_prob":r.get("top3_prob",np.nan),
+            "base_ai_index":r.get("基礎AI指数",r.get("ai_index",np.nan)),
+            "day_adjustment":r.get("当日補正",0.0),"ai_index":r.get("ai_index",np.nan),
+            "odds":r.get("odds",np.nan),"popularity":r.get("popularity",np.nan),
+            "body_weight":r.get("body_weight",np.nan),
+            "body_weight_diff":r.get("body_weight_diff",np.nan),
+            "actual_finish":np.nan,"actual_win":np.nan,"actual_top3":np.nan,
+            "settled_at":"","result_url":"",
+        })
+    return norm_history(pd.DataFrame(rows))
+
+def save_prediction_if_new(backend,detail,app_version="1.6"):
+    snap=prediction_snapshot(detail,app_version)
+    if snap.empty:
+        return {"saved":False,"message":"予想データなし"}
+    sid=str(snap.iloc[0]["snapshot_id"])
+    hist=backend.load()
+    if sid in set(hist["snapshot_id"].astype(str)):
+        return {"saved":False,"message":"記録済み","snapshot_id":sid}
+    out=pd.concat([hist,snap],ignore_index=True)
+    backend.save(out)
+    return {"saved":True,"message":"記録しました","snapshot_id":sid}
+
+def generic_result_parse(html):
+    parsed=parse_jra_result_html(html)
+    if len(parsed.get("rows",pd.DataFrame())):
+        return parsed
+    try:
+        tabs=pd.read_html(StringIO(html))
+    except Exception:
+        return {"rows":pd.DataFrame()}
+    for tab in tabs:
+        t=_flatten_columns(tab)
+        cols=list(t.columns)
+        cf=_find_col(cols,["着順","着"])
+        cn=_find_col(cols,["馬番","馬 番"])
+        if not cf or not cn:
+            continue
+        rows=[]
+        for _,r in t.iterrows():
+            fm=re.search(r"^\s*(\d+)",str(r.get(cf,"")))
+            nm=re.search(r"(\d+)",str(r.get(cn,"")))
+            if fm and nm:
+                rows.append({"finish":int(fm.group(1)),"horse_no":int(nm.group(1))})
+        if rows:
+            return {"rows":pd.DataFrame(rows)}
+    return {"rows":pd.DataFrame()}
+
+def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
+    s=_session()
+    rn=int(str(race_no).upper().replace("R","").strip())
+
+    # JRA official first.
+    for rid,entry in (official_entry_urls or {}).items():
+        if VENUE_CODE.get(rid[4:6],"")==str(course) and int(rid[-2:])==rn:
+            u=_result_url_from_entry(entry,s)
+            if u:
+                r=s.get(u,timeout=20); r.raise_for_status()
+                p=generic_result_parse(r.text)
+                if len(p.get("rows",pd.DataFrame())):
+                    p.update({"result_url":u,"source":"JRA公式"})
+                    return p
+
+    # Generic fallback by race_id.
+    rid=None
+    for k,v in (race_id_map or {}).items():
+        try:
+            kc,kr=k.split("|",1)
+            if kc==str(course) and int(str(kr).replace("R",""))==rn:
+                rid=v; break
+        except Exception:
+            pass
+    if rid:
+        u=f"https://race.netkeiba.com/race/result.html?race_id={rid}"
+        r=s.get(u,timeout=20); r.raise_for_status()
+        p=generic_result_parse(r.text)
+        if len(p.get("rows",pd.DataFrame())):
+            p.update({"result_url":u,"source":"公開レース結果"})
+            return p
+
+    raise RuntimeError("結果が未公開、または結果ページを取得できませんでした。")
+
+def settle_latest_snapshot(backend,date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
+    hist=backend.load()
+    if hist.empty:
+        raise RuntimeError("保存済み予想がありません。")
+    target=hist[
+        (hist["date"].astype(str)==str(date_iso)) &
+        (hist["course"].astype(str)==str(course)) &
+        (hist["race_no"].astype(str).str.replace("R","",regex=False)
+         ==str(race_no).replace("R",""))
+    ].copy()
+    if target.empty:
+        raise RuntimeError("このレースの保存済み予想がありません。")
+
+    target["_dt"]=pd.to_datetime(target["recorded_at"],errors="coerce")
+    snap_times=target.groupby("snapshot_id")["_dt"].max().sort_values()
+    sid=str(snap_times.index[-1])
+
+    result=fetch_race_result(
+        date_iso,course,race_no,
+        official_entry_urls=official_entry_urls,
+        race_id_map=race_id_map,
+    )
+    res=result["rows"].copy()
+    finish_map={}
+    for _,r in res.iterrows():
+        no=pd.to_numeric(pd.Series([r.get("horse_no")]),errors="coerce").iloc[0]
+        fi=pd.to_numeric(pd.Series([r.get("finish")]),errors="coerce").iloc[0]
+        if pd.notna(no) and pd.notna(fi):
+            finish_map[int(no)]=int(fi)
+
+    mask=hist["snapshot_id"].astype(str)==sid
+    now=datetime.now(JST).isoformat(timespec="seconds")
+    matched=0
+    for idx in hist.index[mask]:
+        no=pd.to_numeric(pd.Series([hist.at[idx,"horse_no"]]),errors="coerce").iloc[0]
+        if pd.isna(no) or int(no) not in finish_map:
+            continue
+        fi=finish_map[int(no)]
+        hist.at[idx,"actual_finish"]=fi
+        hist.at[idx,"actual_win"]=1 if fi==1 else 0
+        hist.at[idx,"actual_top3"]=1 if fi<=3 else 0
+        hist.at[idx,"settled_at"]=now
+        hist.at[idx,"result_url"]=result.get("result_url","")
+        matched+=1
+
+    if matched<3:
+        raise RuntimeError("結果と予想の照合数が不足しています。")
+    backend.save(hist)
+    return {"matched":matched,"source":result.get("source",""),"snapshot_id":sid}
+
+def settled_latest(history):
+    h=norm_history(history)
+    h["actual_finish_num"]=pd.to_numeric(h["actual_finish"],errors="coerce")
+    h=h[h["actual_finish_num"].notna()].copy()
+    if h.empty:
+        return h
+    racecols=["date","course","race_no"]
+    snap=h[["snapshot_id","recorded_at"]+racecols].drop_duplicates()
+    snap["_dt"]=pd.to_datetime(snap["recorded_at"],errors="coerce")
+    snap=snap.sort_values("_dt").groupby(racecols,as_index=False).tail(1)
+    keep=set(snap["snapshot_id"].astype(str))
+    return h[h["snapshot_id"].astype(str).isin(keep)].copy()
+
+def evaluation_metrics(history):
+    h=settled_latest(history)
+    if h.empty:
+        return {
+            "races":0,"horses":0,"main_win_rate":np.nan,"main_top3_rate":np.nan,
+            "brier_win":np.nan,"brier_top3":np.nan,"log_loss":np.nan,
+            "approx_main_roi":np.nan,
+        },h
+
+    for c in ["win_prob","top3_prob","actual_win","actual_top3","odds"]:
+        h[c]=pd.to_numeric(h[c],errors="coerce")
+    races=int(h[["date","course","race_no"]].drop_duplicates().shape[0])
+    main=h[h["mark"].astype(str)=="◎"].copy()
+    eps=1e-9
+    wp=h["win_prob"].clip(eps,1-eps)
+    tp=h["top3_prob"].clip(eps,1-eps)
+    winner=h[h["actual_win"]==1]
+    ll=float((-np.log(winner["win_prob"].clip(eps,1))).mean()) if len(winner) else np.nan
+
+    roi=np.nan
+    if len(main):
+        odds=main["odds"]
+        valid=odds.notna()
+        if valid.any():
+            returns=(main.loc[valid,"actual_win"].fillna(0)*odds[valid]*100).sum()
+            roi=float(returns/(int(valid.sum())*100)*100)
+
+    return {
+        "races":races,
+        "horses":int(len(h)),
+        "main_win_rate":float(main["actual_win"].mean()) if len(main) else np.nan,
+        "main_top3_rate":float(main["actual_top3"].mean()) if len(main) else np.nan,
+        "brier_win":float(np.mean((wp-h["actual_win"])**2)),
+        "brier_top3":float(np.mean((tp-h["actual_top3"])**2)),
+        "log_loss":ll,
+        "approx_main_roi":roi,
+    },h
+
+def mark_summary(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    for c in ["actual_win","actual_top3","win_prob"]:
+        h[c]=pd.to_numeric(h[c],errors="coerce")
+    out=h.groupby("mark",dropna=False).agg({
+        "horse_no":"count","actual_win":"sum","actual_top3":"sum","win_prob":"mean"
+    }).reset_index()
+    out=out.rename(columns={
+        "mark":"印","horse_no":"出走数","actual_win":"勝利数",
+        "actual_top3":"3着内数","win_prob":"平均予測勝率",
+    })
+    out["勝率"]=out["勝利数"]/out["出走数"]
+    out["3着内率"]=out["3着内数"]/out["出走数"]
+    order={"◎":1,"○":2,"▲":3,"△":4,"☆":5,"注":6,"×":7}
+    out["_o"]=out["印"].map(order).fillna(99)
+    return out.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+
+def condition_summary(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    for c in ["actual_win","actual_top3","win_prob"]:
+        h[c]=pd.to_numeric(h[c],errors="coerce")
+    h=h[h["mark"].astype(str)=="◎"].copy()
+    if h.empty:
+        return pd.DataFrame()
+    out=h.groupby(["course","surface","distance"],dropna=False).agg({
+        "snapshot_id":"nunique","actual_win":"mean","actual_top3":"mean","win_prob":"mean"
+    }).reset_index()
+    return out.rename(columns={
+        "course":"競馬場","surface":"馬場","distance":"距離","snapshot_id":"レース数",
+        "actual_win":"◎勝率","actual_top3":"◎3着内率","win_prob":"◎平均予測勝率",
+    }).sort_values(["レース数","◎3着内率"],ascending=[False,False]).reset_index(drop=True)
+
+def calibration_summary(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    h["win_prob"]=pd.to_numeric(h["win_prob"],errors="coerce")
+    h["actual_win"]=pd.to_numeric(h["actual_win"],errors="coerce")
+    bins=[0,.05,.10,.15,.20,.30,.40,.60,1.01]
+    labels=["0-5%","5-10%","10-15%","15-20%","20-30%","30-40%","40-60%","60%+"]
+    h["勝率帯"]=pd.cut(h["win_prob"],bins=bins,labels=labels,right=False)
+    out=h.groupby("勝率帯",observed=True).agg({
+        "horse_no":"count","win_prob":"mean","actual_win":"mean"
+    }).reset_index()
+    out=out.rename(columns={"horse_no":"頭数","win_prob":"平均予測勝率","actual_win":"実勝率"})
+    out["差"]=out["実勝率"]-out["平均予測勝率"]
+    return out
+
+def training_candidate_csv(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    cols=[
+        "date","course","race_no","race_name","surface","distance","going",
+        "horse_no","horse_name","odds","popularity","body_weight","body_weight_diff",
+        "mark","rank","win_prob","top3_prob","base_ai_index","day_adjustment","ai_index",
+        "actual_finish","actual_win","actual_top3",
+    ]
+    return h[[c for c in cols if c in h.columns]].copy()

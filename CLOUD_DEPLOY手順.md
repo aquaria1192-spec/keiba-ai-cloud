@@ -47,3 +47,25 @@ Ver.1.5のファイル一式を同じGitHubリポジトリへ上書きしてく�
 - README.md
 
 Streamlit Community CloudはGitHubの更新を検知すると通常は自動で再起動します。
+
+
+## Cloud Ver.1.6 更新
+
+既存 `keiba-ai-cloud` へ差し替え用ファイルをアップロードして Commit changes します。
+
+追加:
+- evaluation_store.py
+- STREAMLIT_SECRETS設定例.txt
+
+更新:
+- streamlit_app.py
+- README.md
+- CLOUD_DEPLOY手順.md
+
+### 履歴永続保存（任意）
+1. GitHubで別リポジトリ `keiba-ai-history` を作成し、READMEを追加して初期化。
+2. Fine-grained personal access tokenを作成。
+3. 対象を `keiba-ai-history` のみに限定。
+4. Repository permissions → Contents → Read and write。
+5. Streamlitの Manage app → Settings → Secrets に設定例を貼り付け。
+6. 本物のtokenはGitHubへアップロードしない。

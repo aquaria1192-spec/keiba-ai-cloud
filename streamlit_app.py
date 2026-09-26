@@ -16,13 +16,18 @@ from race_day_context import (
     fetch_day_contexts, apply_official_going,
     fetch_same_day_bias, apply_day_adjustments
 )
+from evaluation_store import (
+    HistoryBackend, save_prediction_if_new, settle_latest_snapshot,
+    evaluation_metrics, mark_summary, condition_summary,
+    calibration_summary, training_candidate_csv
+)
 
 BASE = Path(__file__).resolve().parent
 MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.5",
+    page_title="競馬予想AI Cloud Ver.1.6",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -198,16 +203,17 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.5")
-st.caption("当日馬場・天気・馬体重・オッズ・馬場バイアス対応")
+st.title("🏇 競馬予想AI Cloud Ver.1.6")
+st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
 
 st.markdown("""
 <div class="hero">
-<b>「最新データに更新」で当日の条件を取り込みます。</b><br>
-① 出走表・オッズ・馬体重＋JRA馬場情報・天気を更新<br>
-② 開催地 → レースを選択<br>
-③ 終了済み同条件レースから当日バイアスを算出<br>
-④ 全頭印付き予想・買い目を更新
+<b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
+① 当日の出走表・馬場・天気を更新<br>
+② 開催地 → レースを選んで全頭予想<br>
+③ 予想スナップショットを自動記録<br>
+④ レース終了後に結果と照合<br>
+⑤ 精度・得意条件をダッシュボードへ蓄積
 </div>
 """,unsafe_allow_html=True)
 
@@ -216,6 +222,17 @@ try:
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
+
+history_backend=HistoryBackend(st.secrets)
+with st.expander("📊 予想履歴の保存先",expanded=False):
+    st.write(f"現在：**{history_backend.label}**")
+    if history_backend.persistent:
+        st.success("履歴専用GitHubリポジトリへ永続保存します。")
+    else:
+        st.warning(
+            "現在は一時保存です。Streamlit Cloud再起動で履歴が消える場合があります。"
+            " 下のダッシュボードから履歴CSVを定期的にダウンロードしてください。"
+        )
 
 with st.container(border=True):
     st.markdown('<div class="step">① 当日データを取得・更新</div>',unsafe_allow_html=True)
@@ -316,23 +333,139 @@ if features is not None and len(features):
                     detail,context,bias,enabled=use_day_adjustment
                 )
             show_prediction(detail,context,bias)
+
+            fingerprint=(
+                date_iso,str(course),str(race),
+                tuple(
+                    (str(r.get("horse_no","")),round(float(r.get("win_prob",0)),8),
+                     str(r.get("印","")),str(r.get("odds","")))
+                    for _,r in detail.sort_values("horse_no").iterrows()
+                )
+            )
+            if st.session_state.get("_saved_fp_16") != fingerprint:
+                try:
+                    si=save_prediction_if_new(history_backend,detail,"1.6")
+                    st.session_state["_saved_fp_16"]=fingerprint
+                    if si.get("saved"):
+                        st.caption("📝 この予想を評価履歴へ記録しました。")
+                except Exception as ex:
+                    st.warning(f"予想履歴を保存できませんでした：{ex}")
+
+            st.markdown("#### レース終了後の答え合わせ")
+            if st.button(
+                "結果を取得して答え合わせ",
+                use_container_width=True,
+                key=f"settle_{date_iso}_{course}_{race}"
+            ):
+                try:
+                    with st.spinner("結果を取得して照合しています…"):
+                        si=settle_latest_snapshot(
+                            history_backend,date_iso,course,race,
+                            official_entry_urls=official,
+                            race_id_map=info.get("race_id_map") or {},
+                        )
+                    st.success(f"{si['matched']}頭を照合しました。取得元：{si.get('source','')}")
+                except Exception as ex:
+                    st.error(f"答え合わせできませんでした：{ex}")
         except Exception as e:
             st.error(f"予想できませんでした：{e}")
 
-with st.expander("Ver.1.5の当日補正について"):
+
+with st.container(border=True):
+    st.markdown('<div class="step">③ AI自己評価ダッシュボード</div>',unsafe_allow_html=True)
+    try:
+        history=history_backend.load()
+        metrics,settled_df=evaluation_metrics(history)
+        if metrics["races"]==0:
+            st.info(
+                "まだ答え合わせ済みレースがありません。"
+                "結果公開後に「結果を取得して答え合わせ」を押してください。"
+            )
+        else:
+            a,b,c,d=st.columns(4)
+            a.metric("評価済み",f"{metrics['races']}R")
+            b.metric("◎勝率","-" if pd.isna(metrics["main_win_rate"]) else f"{metrics['main_win_rate']*100:.1f}%")
+            c.metric("◎3着内率","-" if pd.isna(metrics["main_top3_rate"]) else f"{metrics['main_top3_rate']*100:.1f}%")
+            d.metric("勝率Brier","-" if pd.isna(metrics["brier_win"]) else f"{metrics['brier_win']:.4f}")
+
+            a,b,c=st.columns(3)
+            a.metric("勝者Log Loss","-" if pd.isna(metrics["log_loss"]) else f"{metrics['log_loss']:.3f}")
+            b.metric("3着内Brier","-" if pd.isna(metrics["brier_top3"]) else f"{metrics['brier_top3']:.4f}")
+            c.metric("◎単勝参考回収率","-" if pd.isna(metrics["approx_main_roi"]) else f"{metrics['approx_main_roi']:.1f}%")
+            st.caption(
+                "Brier / Log Lossは小さいほど良好。参考回収率は予想保存時オッズ換算で、"
+                "確定払戻額そのものではありません。"
+            )
+
+            t1,t2,t3,t4=st.tabs(["印別成績","競馬場・距離別","確率校正","再学習候補"])
+            with t1:
+                q=mark_summary(history)
+                if len(q):
+                    for col in ["勝率","3着内率","平均予測勝率"]:
+                        q[col]=pd.to_numeric(q[col],errors="coerce").map(
+                            lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
+                        )
+                    st.dataframe(q,use_container_width=True,hide_index=True)
+            with t2:
+                q=condition_summary(history)
+                if len(q):
+                    for col in ["◎勝率","◎3着内率","◎平均予測勝率"]:
+                        q[col]=pd.to_numeric(q[col],errors="coerce").map(
+                            lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
+                        )
+                    st.dataframe(q,use_container_width=True,hide_index=True)
+            with t3:
+                q=calibration_summary(history)
+                if len(q):
+                    for col in ["平均予測勝率","実勝率","差"]:
+                        q[col]=pd.to_numeric(q[col],errors="coerce").map(
+                            lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
+                        )
+                    st.dataframe(q,use_container_width=True,hide_index=True)
+                    st.caption("予測勝率と実勝率が近いほど、確率予測が適切に校正されています。")
+            with t4:
+                cand=training_candidate_csv(history)
+                st.write(f"再学習候補：**{metrics['races']}レース / {len(cand)}頭**")
+                if len(cand):
+                    st.download_button(
+                        "再学習候補CSVをダウンロード",
+                        cand.to_csv(index=False).encode("utf-8-sig"),
+                        "keiba_ai_training_candidates.csv","text/csv",
+                        use_container_width=True
+                    )
+
+        st.markdown("#### 履歴バックアップ")
+        raw=history_backend.load()
+        st.download_button(
+            "予想・結果履歴CSVをダウンロード",
+            raw.to_csv(index=False).encode("utf-8-sig"),
+            "keiba_ai_prediction_history.csv","text/csv",
+            use_container_width=True
+        )
+        uploaded=st.file_uploader("履歴CSVを復元・統合",type=["csv"],key="restore16")
+        if uploaded is not None and st.button("履歴CSVを統合する",use_container_width=True,key="merge16"):
+            try:
+                merged=history_backend.merge_import(pd.read_csv(uploaded,low_memory=False))
+                st.success(f"{len(merged)}行の履歴になりました。")
+            except Exception as ex:
+                st.error(f"履歴を統合できませんでした：{ex}")
+    except Exception as ex:
+        st.error(f"自己評価を読み込めませんでした：{ex}")
+
+with st.expander("Ver.1.6の自己評価について"):
     st.write(
-        "JRA公式の「良・稍重・重・不良」は、学習済みモデルがもともと持つ "
-        "`going` 特徴量へ直接入ります。馬体重・増減・単勝オッズ・人気も、"
-        "取得できた最新値をモデルへ渡します。"
+        "レース1つごとにAIモデルを自動更新することはしません。"
+        "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
     )
     st.write(
-        "クッション値・含水率・同日の内外/脚質傾向は、2016-2025学習データに"
-        "同一形式の履歴が揃っていないため、学習済みAIとは分けて最大±5ポイントの"
-        "「当日補正」として表示します。補正理由も馬ごとに表示します。"
+        "十分なレース数が集まったら、再学習候補CSVを使って次版のモデルを"
+        "時系列検証付きで再学習します。"
     )
     st.caption(
-        "天気予報はOpen-Meteoを使用。JRA馬場情報が予想日と一致しない場合は、"
-        "古い馬場状態をAIへ上書きしません。"
+        "確実な永続保存を使う場合は、アプリ本体とは別の履歴専用GitHubリポジトリを設定します。"
     )
 
-st.caption("AI予想・当日補正・買い目は参考情報であり、的中や利益を保証するものではありません。")
+st.caption(
+    "AI予想・当日補正・自己評価・買い目は参考情報です。"
+    "過去成績は将来の的中や利益を保証するものではありません。"
+)
