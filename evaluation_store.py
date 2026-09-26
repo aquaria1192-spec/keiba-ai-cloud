@@ -23,12 +23,48 @@ DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
 
+DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
+DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
+DEFAULT_AUTO_HISTORY_PATH = "automation_data/pre_race_predictions.csv"
+
+def load_public_auto_history(
+    repo=DEFAULT_AUTO_HISTORY_REPO,
+    branch=DEFAULT_AUTO_HISTORY_BRANCH,
+    path=DEFAULT_AUTO_HISTORY_PATH,
+):
+    """
+    Read scheduled pre-race predictions from the public prediction-history branch.
+    No token is required for a public GitHub repository.
+    """
+    if not repo:
+        return blank_history()
+    url=f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+    try:
+        r=requests.get(url,timeout=20)
+        if r.status_code==404:
+            return blank_history()
+        r.raise_for_status()
+        return norm_history(pd.read_csv(StringIO(r.text),low_memory=False))
+    except Exception:
+        return blank_history()
+
+def merge_histories(*frames):
+    xs=[norm_history(x) for x in frames if x is not None and len(x)]
+    if not xs:
+        return blank_history()
+    out=pd.concat(xs,ignore_index=True)
+    return (
+        out.drop_duplicates(["snapshot_id","horse_no"],keep="last")
+        .reset_index(drop=True)
+    )
+
 COLS = [
     "snapshot_id","recorded_at","app_version",
     "date","course","race_no","race_name","surface","distance","going",
     "horse_no","horse_name","mark","rank",
     "win_prob","top3_prob","base_ai_index","day_adjustment","ai_index",
     "odds","popularity","body_weight","body_weight_diff",
+    "snapshot_type","post_time","minutes_before_post","auto_generated",
     "actual_finish","actual_win","actual_top3","settled_at","result_url",
 ]
 
@@ -41,7 +77,7 @@ def norm_history(df):
     out=df.copy()
     text_cols=[
         "snapshot_id","recorded_at","app_version","date","course","race_no",
-        "race_name","surface","going","horse_name","mark","settled_at","result_url",
+        "race_name","surface","going","horse_name","mark","snapshot_type","post_time","settled_at","result_url",
     ]
     for c in COLS:
         if c not in out.columns:
@@ -185,6 +221,10 @@ def prediction_snapshot(detail,app_version="1.6.2"):
             "odds":r.get("odds",np.nan),"popularity":r.get("popularity",np.nan),
             "body_weight":r.get("body_weight",np.nan),
             "body_weight_diff":r.get("body_weight_diff",np.nan),
+            "snapshot_type":r.get("snapshot_type","manual"),
+            "post_time":r.get("post_time",""),
+            "minutes_before_post":r.get("minutes_before_post",np.nan),
+            "auto_generated":r.get("auto_generated",False),
             "actual_finish":np.nan,"actual_win":np.nan,"actual_top3":np.nan,
             "settled_at":"","result_url":"",
         })

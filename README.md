@@ -1,86 +1,96 @@
-# 競馬予想AI Cloud Ver.1.6.2
+# 競馬予想AI Cloud Ver.1.7
 
-Ver.1.6は「自己評価・学習データ蓄積版」です。
+## レース前予想 自動保存版
 
-## 新機能
-- 予想時の全頭確率・印・AI指数・オッズを自動記録
-- 同じ予想は重複保存しない
-- オッズ・馬体重などが変われば新しいスナップショットとして記録
-- レース終了後に結果を取得して答え合わせ
-- ◎勝率 / ◎3着内率
-- 勝率Brier Score / 3着内Brier Score
-- 勝者Log Loss
-- 印別成績
-- 競馬場・馬場・距離別成績
-- 予測勝率と実勝率の校正
-- 再学習候補CSV
-- 履歴CSVバックアップ / 復元
+Ver.1.7では、PCやスマホでアプリを開いていなくても
+GitHub Actionsが開催日に自動実行されます。
 
-## 自動再学習をまだ行わない理由
-レース結果が少ないうちに毎回モデルを更新すると、偶然の結果へ過学習します。
-Ver.1.6では評価データを蓄積し、十分な件数が集まってから次版で再学習します。
+### 自動処理
 
-## 履歴の永続保存（任意・推奨）
-Streamlit Cloudのローカル保存は再起動で消える可能性があります。
-確実に保存したい場合は、アプリ本体とは別に履歴専用GitHubリポジトリ
-（例 `keiba-ai-history`）を作成し、Streamlit Secretsへ設定します。
+1. 開催日朝 8:30頃（JST）
+   - 当日のレース一覧を取得
+   - 全レースの朝予想を作成
+   - `morning` として保存
 
-```toml
-GITHUB_TOKEN = "github_pat_xxxxxxxxx"
-GITHUB_HISTORY_REPO = "ユーザー名/keiba-ai-history"
-GITHUB_HISTORY_BRANCH = "main"
-GITHUB_HISTORY_PATH = "prediction_history.csv"
-```
+2. 9:00～16:40頃
+   - 20分間隔でGitHub Actionsが確認
+   - 発走15～65分前に入ったレースを自動検出
+   - 最新オッズ・馬体重・馬場状態を取得
+   - `pre_race` として1レース1回保存
 
-Fine-grained tokenは履歴専用リポジトリの Contents を Read and write にします。
+3. 17:30頃
+   - 保存済み予想を結果と自動照合
+   - `pre_race` があればそれを優先
+   - なければ `morning` を評価
 
-**本物のトークンをGitHubのPython/READMEへ書かないでください。**
-Streamlit CloudのSecretsだけに保存してください。
+### 保存場所
 
+アプリ本体は `main` ブランチです。
 
-## Ver.1.6.1 修正
+自動予想履歴は同じGitHubリポジトリ内の
+`prediction-history` ブランチへ保存します。
 
-「結果が未公開、または結果ページを取得できませんでした」と表示される問題を修正しました。
+ファイル:
+- `automation_data/pre_race_predictions.csv`
+- `automation_data/schedules/race_schedule_YYYYMMDD.json`
 
-原因:
-- 2026-09-26のJRA公式出馬表URLが結果照合用の一覧に入っていなかった
-- Cloudの既存セッションでは official_entry_urls が空のまま残る場合があった
+mainブランチを書き換えないため、
+自動予想保存ごとにStreamlitが再デプロイされません。
 
-修正:
-- 9月26日 中山・阪神のJRA公式出馬表を結果探索元に追加
-- 答え合わせを押した時点でJRA公式リンクを再探索
-- 出馬表の「レース結果」リンクを以前より柔軟に検出
-- 取得失敗時に詳細理由を画面へ表示
+## GitHub Actionsの設定
 
-更新後は一度「最新データに更新」を押してから答え合わせしてください。
+Ver.1.7のファイルをGitHubへアップロードすると、
 
+`.github/workflows/keiba_auto_predictions.yml`
 
-## Ver.1.6.2 変更点：1日まとめて答え合わせ
+が追加されます。
 
-各レースの予想画面から「答え合わせ」ボタンを削除しました。
+### 1. Actionsを有効にする
 
-代わりにAI自己評価画面の先頭へ
+GitHubリポジトリ
+→ Actions
+→ ワークフローを有効化
 
-`この日の全レースをまとめて答え合わせ`
+### 2. 書き込み権限
 
-ボタンを追加しました。
+GitHub
+→ Settings
+→ Actions
+→ General
+→ Workflow permissions
 
-1回押すだけで、その日の全レースを順番に確認します。
+`Read and write permissions`
 
-表示状態:
-- 照合完了
-- 照合済み
-- 未公開・取得失敗
-- 予想履歴なし
+を選択して Save します。
 
-結果がまだ公開されていないレースが混ざっていても、
-他のレースの処理は止まりません。
+これによりGitHub Actionsが
+`prediction-history` ブランチを自動作成・更新できます。
 
-### 評価上の重要事項
+## 手動テスト
 
-答え合わせは「事前に保存された予想」と結果を比較します。
-そのため、予想を一度も表示・保存していないレースは
-`予想履歴なし` と表示します。
+GitHub
+→ Actions
+→ `Keiba AI automatic pre-race predictions`
+→ Run workflow
 
-レース終了後に初めて予想を作って過去結果と比較することは、
-正しい予測精度評価にならないため自動生成しません。
+Mode:
+- `morning` 朝予想を全レース作成
+- `pre_race` 発走15～65分前のレースだけ保存
+- `settle` その日の結果を自動照合
+- `auto` 現在時刻から自動判定
+
+Target dateに `2026-09-27` のように入力してテストできます。
+
+## 精度評価
+
+レース終了後の評価では、
+`pre_race` の予想がある場合はそれを優先し、
+なければ朝の `morning` 予想を利用します。
+
+「結果を知った後に作った予想」は自動評価には使用しません。
+
+## 注意
+
+GitHub Actionsのscheduleは厳密なリアルタイム保証ではなく、
+混雑時には数分～それ以上遅れることがあります。
+そのため発走前保存の対象時間を15～65分前と広めにしています。

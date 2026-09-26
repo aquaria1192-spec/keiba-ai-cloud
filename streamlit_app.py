@@ -19,7 +19,8 @@ from race_day_context import (
 from evaluation_store import (
     HistoryBackend, save_prediction_if_new, settle_day_snapshots,
     evaluation_metrics, mark_summary, condition_summary,
-    calibration_summary, training_candidate_csv
+    calibration_summary, training_candidate_csv,
+    load_public_auto_history, merge_histories
 )
 
 BASE = Path(__file__).resolve().parent
@@ -27,7 +28,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.6.2",
+    page_title="競馬予想AI Cloud Ver.1.7",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -203,7 +204,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.6.2")
+st.title("🏇 競馬予想AI Cloud Ver.1.7")
 st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
 
 st.markdown("""
@@ -373,8 +374,16 @@ with st.container(border=True):
             .itertuples(index=False,name=None)
         )
 
-    history=history_backend.load()
+    manual_history=history_backend.load()
+    auto_history=load_public_auto_history()
+    history=merge_histories(manual_history,auto_history)
     saved_day_races=0
+    auto_day_races=0
+    if settle_date and len(auto_history):
+        ah=auto_history[auto_history["date"].astype(str)==settle_date]
+        auto_day_races=int(
+            ah[["course","race_no"]].drop_duplicates().shape[0]
+        )
     if settle_date and len(history):
         hday=history[history["date"].astype(str)==settle_date]
         saved_day_races=int(
@@ -384,10 +393,11 @@ with st.container(border=True):
     st.write(
         f"対象日：**{settle_date or '-'}**　／　"
         f"当日レース：**{len(expected_races)}R**　／　"
-        f"保存済み予想：**{saved_day_races}R**"
+        f"保存済み予想：**{saved_day_races}R**　／　自動レース前予想：**{auto_day_races}R**"
     )
     st.caption(
         "1回押すだけで、その日の全レースを順番に確認します。"
+        " 自動レース前予想はGitHub Actionsでも17:30頃に自動答え合わせされます。"
         "結果未公開のレースは飛ばし、予想履歴がないレースも一覧で確認できます。"
     )
 
@@ -436,8 +446,55 @@ with st.container(border=True):
             if rep is not None and len(rep):
                 st.dataframe(rep,use_container_width=True,hide_index=True)
 
+with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
+    auto_hist=load_public_auto_history()
+    if auto_hist.empty:
+        st.info(
+            "自動保存履歴はまだありません。GitHub Actionsのワークフローを有効にすると、"
+            "開催日の朝と発走前に自動予想を保存します。"
+        )
+    else:
+        ah=auto_hist.copy()
+        ah["recorded_dt"]=pd.to_datetime(ah["recorded_at"],errors="coerce")
+        latest_date=ah["date"].astype(str).max()
+        q=ah[ah["date"].astype(str)==latest_date]
+        races=int(q[["course","race_no"]].drop_duplicates().shape[0])
+        near=int(
+            q[q["snapshot_type"].astype(str)=="pre_race"]
+            [["course","race_no"]].drop_duplicates().shape[0]
+        )
+        morning=int(
+            q[q["snapshot_type"].astype(str)=="morning"]
+            [["course","race_no"]].drop_duplicates().shape[0]
+        )
+        settled=int(
+            q[pd.to_numeric(q["actual_finish"],errors="coerce").notna()]
+            [["course","race_no"]].drop_duplicates().shape[0]
+        )
+        st.write(
+            f"最新日：**{latest_date}**　／　対象 {races}R　／　"
+            f"朝保存 {morning}R　／　発走前保存 {near}R　／　答え合わせ済み {settled}R"
+        )
+        show_cols=[
+            "course","race_no","snapshot_type","post_time",
+            "minutes_before_post","recorded_at","actual_finish"
+        ]
+        last=(
+            q.sort_values("recorded_dt")
+            .groupby(["course","race_no","snapshot_type"],as_index=False)
+            .tail(1)
+        )
+        last=last[[c for c in show_cols if c in last.columns]].rename(columns={
+            "course":"競馬場","race_no":"レース","snapshot_type":"保存種別",
+            "post_time":"発走","minutes_before_post":"発走何分前",
+            "recorded_at":"保存時刻","actual_finish":"実着順",
+        })
+        st.dataframe(last,use_container_width=True,hide_index=True)
+
     try:
-        history=history_backend.load()
+        manual_history=history_backend.load()
+        auto_history=load_public_auto_history()
+        history=merge_histories(manual_history,auto_history)
         metrics,settled_df=evaluation_metrics(history)
         if metrics["races"]==0:
             st.info(
@@ -498,7 +555,10 @@ with st.container(border=True):
                     )
 
         st.markdown("#### 履歴バックアップ")
-        raw=history_backend.load()
+        raw=merge_histories(
+            history_backend.load(),
+            load_public_auto_history()
+        )
         st.download_button(
             "予想・結果履歴CSVをダウンロード",
             raw.to_csv(index=False).encode("utf-8-sig"),
@@ -515,7 +575,7 @@ with st.container(border=True):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.6.2の自己評価について"):
+with st.expander("Ver.1.7の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -525,7 +585,9 @@ with st.expander("Ver.1.6.2の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "確実な永続保存を使う場合は、アプリ本体とは別の履歴専用GitHubリポジトリを設定します。"
+        "Ver.1.7の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
+        "Streamlitアプリが再デプロイされることはありません。"
     )
 
 st.caption(
