@@ -17,7 +17,7 @@ from race_day_context import (
     fetch_same_day_bias, apply_day_adjustments
 )
 from evaluation_store import (
-    HistoryBackend, save_prediction_if_new, settle_latest_snapshot,
+    HistoryBackend, save_prediction_if_new, settle_day_snapshots,
     evaluation_metrics, mark_summary, condition_summary,
     calibration_summary, training_candidate_csv
 )
@@ -27,7 +27,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.6.1",
+    page_title="競馬予想AI Cloud Ver.1.6.2",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -203,7 +203,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.6.1")
+st.title("🏇 競馬予想AI Cloud Ver.1.6.2")
 st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
 
 st.markdown("""
@@ -344,43 +344,105 @@ if features is not None and len(features):
             )
             if st.session_state.get("_saved_fp_16") != fingerprint:
                 try:
-                    si=save_prediction_if_new(history_backend,detail,"1.6.1")
+                    si=save_prediction_if_new(history_backend,detail,"1.6.2")
                     st.session_state["_saved_fp_16"]=fingerprint
                     if si.get("saved"):
                         st.caption("📝 この予想を評価履歴へ記録しました。")
                 except Exception as ex:
                     st.warning(f"予想履歴を保存できませんでした：{ex}")
 
-            st.markdown("#### レース終了後の答え合わせ")
-            st.caption("JRA公式の結果ページを再探索して照合します。結果公開後に使用してください。")
-            if st.button(
-                "結果を取得して答え合わせ",
-                use_container_width=True,
-                key=f"settle_{date_iso}_{course}_{race}"
-            ):
-                try:
-                    with st.spinner("結果を取得して照合しています…"):
-                        si=settle_latest_snapshot(
-                            history_backend,date_iso,course,race,
-                            official_entry_urls=official,
-                            race_id_map=info.get("race_id_map") or {},
-                        )
-                    st.success(f"{si['matched']}頭を照合しました。取得元：{si.get('source','')}")
-                except Exception as ex:
-                    st.error(f"答え合わせできませんでした：{ex}")
         except Exception as e:
             st.error(f"予想できませんでした：{e}")
 
 
 with st.container(border=True):
-    st.markdown('<div class="step">③ AI自己評価ダッシュボード</div>',unsafe_allow_html=True)
+    st.markdown('<div class="step">③ 1日まとめて答え合わせ・AI自己評価</div>',unsafe_allow_html=True)
+
+    # Use the date currently loaded in the app. All races for that date are
+    # included in the report; races without a saved pre-result prediction are
+    # explicitly shown as "予想履歴なし".
+    settle_date=str(st.session_state.get("cloud_info",{}).get("date",""))
+    entries_for_day=st.session_state.get("cloud_entries")
+    expected_races=[]
+    if entries_for_day is not None and len(entries_for_day):
+        eq=entries_for_day.copy()
+        eq=eq[eq["date"].astype(str)==settle_date] if settle_date else eq
+        expected_races=list(
+            eq[["course","race_no"]]
+            .drop_duplicates()
+            .itertuples(index=False,name=None)
+        )
+
+    history=history_backend.load()
+    saved_day_races=0
+    if settle_date and len(history):
+        hday=history[history["date"].astype(str)==settle_date]
+        saved_day_races=int(
+            hday[["course","race_no"]].drop_duplicates().shape[0]
+        )
+
+    st.write(
+        f"対象日：**{settle_date or '-'}**　／　"
+        f"当日レース：**{len(expected_races)}R**　／　"
+        f"保存済み予想：**{saved_day_races}R**"
+    )
+    st.caption(
+        "1回押すだけで、その日の全レースを順番に確認します。"
+        "結果未公開のレースは飛ばし、予想履歴がないレースも一覧で確認できます。"
+    )
+
+    bulk_clicked=st.button(
+        "この日の全レースをまとめて答え合わせ",
+        type="primary",
+        use_container_width=True,
+        disabled=not bool(settle_date),
+        key="bulk_settle_day_162"
+    )
+
+    if bulk_clicked:
+        info_now=st.session_state.get("cloud_info") or {}
+        progress=st.progress(0,text="答え合わせを開始します…")
+        def _bulk_progress(i,total,msg):
+            progress.progress(
+                min(1.0, i/max(total,1)),
+                text=msg
+            )
+        try:
+            result=settle_day_snapshots(
+                history_backend,
+                settle_date,
+                official_entry_urls=info_now.get("official_entry_urls") or {},
+                race_id_map=info_now.get("race_id_map") or {},
+                expected_races=expected_races,
+                progress_callback=_bulk_progress,
+            )
+            progress.progress(1.0,text="1日分の答え合わせが完了しました。")
+            st.session_state["bulk_settle_result_162"]=result
+            st.success(
+                f"{result['total']}R確認："
+                f"新規照合 {result['completed']}R／"
+                f"照合済み {result['already']}R／"
+                f"未公開・取得失敗 {result['failed']}R／"
+                f"予想履歴なし {result['no_prediction']}R"
+            )
+        except Exception as ex:
+            progress.empty()
+            st.error(f"1日まとめて答え合わせできませんでした：{ex}")
+
+    bulk_result=st.session_state.get("bulk_settle_result_162")
+    if bulk_result and bulk_result.get("date")==settle_date:
+        with st.expander("全レースの答え合わせ結果",expanded=True):
+            rep=bulk_result.get("report")
+            if rep is not None and len(rep):
+                st.dataframe(rep,use_container_width=True,hide_index=True)
+
     try:
         history=history_backend.load()
         metrics,settled_df=evaluation_metrics(history)
         if metrics["races"]==0:
             st.info(
                 "まだ答え合わせ済みレースがありません。"
-                "結果公開後に「結果を取得して答え合わせ」を押してください。"
+                "結果公開後に「この日の全レースをまとめて答え合わせ」を押してください。"
             )
         else:
             a,b,c,d=st.columns(4)
@@ -453,7 +515,7 @@ with st.container(border=True):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.6.1の自己評価について"):
+with st.expander("Ver.1.6.2の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"

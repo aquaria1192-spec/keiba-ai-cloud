@@ -39,9 +39,15 @@ def norm_history(df):
     if df is None or len(df)==0:
         return blank_history()
     out=df.copy()
+    text_cols=[
+        "snapshot_id","recorded_at","app_version","date","course","race_no",
+        "race_name","surface","going","horse_name","mark","settled_at","result_url",
+    ]
     for c in COLS:
         if c not in out.columns:
-            out[c]=np.nan
+            out[c]="" if c in text_cols else np.nan
+    for c in text_cols:
+        out[c]=out[c].fillna("").astype(str)
     return out[COLS]
 
 def secret_get(secrets,key,default=""):
@@ -140,7 +146,7 @@ def numtext(v):
     x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
     return "" if pd.isna(x) else f"{float(x):.8f}"
 
-def prediction_snapshot(detail,app_version="1.6.1"):
+def prediction_snapshot(detail,app_version="1.6.2"):
     if detail is None or len(detail)==0:
         return blank_history()
 
@@ -184,7 +190,7 @@ def prediction_snapshot(detail,app_version="1.6.1"):
         })
     return norm_history(pd.DataFrame(rows))
 
-def save_prediction_if_new(backend,detail,app_version="1.6.1"):
+def save_prediction_if_new(backend,detail,app_version="1.6.2"):
     snap=prediction_snapshot(detail,app_version)
     if snap.empty:
         return {"saved":False,"message":"予想データなし"}
@@ -352,6 +358,194 @@ def settle_latest_snapshot(backend,date_iso,course,race_no,official_entry_urls=N
         raise RuntimeError("結果と予想の照合数が不足しています。")
     backend.save(hist)
     return {"matched":matched,"source":result.get("source",""),"snapshot_id":sid}
+
+def _race_no_int(v):
+    try:
+        return int(str(v).upper().replace("R","").strip())
+    except Exception:
+        return 999
+
+def _latest_snapshot_id_for_race(hist, date_iso, course, race_no):
+    q=hist[
+        (hist["date"].astype(str)==str(date_iso)) &
+        (hist["course"].astype(str)==str(course)) &
+        (hist["race_no"].astype(str).str.replace("R","",regex=False)
+         ==str(race_no).replace("R",""))
+    ].copy()
+    if q.empty:
+        return ""
+    q["_dt"]=pd.to_datetime(q["recorded_at"],errors="coerce")
+    times=q.groupby("snapshot_id")["_dt"].max().sort_values()
+    return str(times.index[-1]) if len(times) else ""
+
+def settle_day_snapshots(
+    backend,
+    date_iso,
+    official_entry_urls=None,
+    race_id_map=None,
+    expected_races=None,
+    progress_callback=None,
+):
+    """
+    Check all races for one day in one operation.
+
+    expected_races:
+      iterable of (course, race_no). When supplied, races with no saved
+      prediction are included in the report as "予想履歴なし".
+
+    Only the latest saved prediction snapshot for each race is evaluated.
+    The history file is saved once after the entire day is processed.
+    """
+    hist=backend.load()
+    if hist.empty and not expected_races:
+        raise RuntimeError("保存済み予想がありません。")
+
+    date_iso=str(date_iso)
+
+    # Saved races for the requested day.
+    saved=[]
+    if not hist.empty:
+        q=hist[hist["date"].astype(str)==date_iso].copy()
+        if len(q):
+            saved=list(
+                q[["course","race_no"]]
+                .drop_duplicates()
+                .itertuples(index=False,name=None)
+            )
+
+    # Union with all races in the day's entry data.
+    pairs=[]
+    seen=set()
+    for item in list(expected_races or []) + saved:
+        try:
+            course,race_no=item[0],item[1]
+        except Exception:
+            continue
+        key=(str(course),str(race_no))
+        if key not in seen:
+            seen.add(key)
+            pairs.append(key)
+
+    if not pairs:
+        raise RuntimeError("この開催日の予想履歴がありません。")
+
+    # Sort by venue then numeric race number.
+    pairs=sorted(pairs,key=lambda x:(x[0],_race_no_int(x[1])))
+
+    rows=[]
+    changed=False
+    total=len(pairs)
+    now=datetime.now(JST).isoformat(timespec="seconds")
+
+    for i,(course,race_no) in enumerate(pairs, start=1):
+        if progress_callback:
+            try:
+                progress_callback(
+                    i,total,
+                    f"{course} {race_no} を確認中… {i}/{total}"
+                )
+            except Exception:
+                pass
+
+        sid=_latest_snapshot_id_for_race(
+            hist,date_iso,course,race_no
+        ) if not hist.empty else ""
+
+        if not sid:
+            rows.append({
+                "競馬場":course,"レース":race_no,
+                "状態":"予想履歴なし","照合頭数":0,
+                "取得元":"","メッセージ":"事前に保存された予想がありません。",
+            })
+            continue
+
+        mask=hist["snapshot_id"].astype(str)==sid
+        snap=hist.loc[mask].copy()
+        actual=pd.to_numeric(snap["actual_finish"],errors="coerce")
+
+        # Already completely/meaningfully settled.
+        if int(actual.notna().sum()) >= 3:
+            rows.append({
+                "競馬場":course,"レース":race_no,
+                "状態":"照合済み","照合頭数":int(actual.notna().sum()),
+                "取得元":"保存済み",
+                "メッセージ":"すでに答え合わせ済みです。",
+            })
+            continue
+
+        try:
+            result=fetch_race_result(
+                date_iso,course,race_no,
+                official_entry_urls=official_entry_urls,
+                race_id_map=race_id_map,
+            )
+            res=result["rows"].copy()
+            finish_map={}
+            for _,r in res.iterrows():
+                no=pd.to_numeric(
+                    pd.Series([r.get("horse_no")]),errors="coerce"
+                ).iloc[0]
+                fi=pd.to_numeric(
+                    pd.Series([r.get("finish")]),errors="coerce"
+                ).iloc[0]
+                if pd.notna(no) and pd.notna(fi):
+                    finish_map[int(no)]=int(fi)
+
+            matched=0
+            for idx in hist.index[mask]:
+                no=pd.to_numeric(
+                    pd.Series([hist.at[idx,"horse_no"]]),errors="coerce"
+                ).iloc[0]
+                if pd.isna(no) or int(no) not in finish_map:
+                    continue
+                fi=finish_map[int(no)]
+                hist.at[idx,"actual_finish"]=fi
+                hist.at[idx,"actual_win"]=1 if fi==1 else 0
+                hist.at[idx,"actual_top3"]=1 if fi<=3 else 0
+                hist.at[idx,"settled_at"]=now
+                hist.at[idx,"result_url"]=result.get("result_url","")
+                matched+=1
+
+            if matched < 3:
+                rows.append({
+                    "競馬場":course,"レース":race_no,
+                    "状態":"取得失敗","照合頭数":matched,
+                    "取得元":result.get("source",""),
+                    "メッセージ":"結果は取得できましたが、予想との照合数が不足しています。",
+                })
+                continue
+
+            changed=True
+            rows.append({
+                "競馬場":course,"レース":race_no,
+                "状態":"照合完了","照合頭数":matched,
+                "取得元":result.get("source",""),
+                "メッセージ":"",
+            })
+
+        except Exception as e:
+            rows.append({
+                "競馬場":course,"レース":race_no,
+                "状態":"未公開・取得失敗","照合頭数":0,
+                "取得元":"",
+                "メッセージ":str(e),
+            })
+
+    # One write for the whole day.
+    if changed:
+        backend.save(hist)
+
+    report=pd.DataFrame(rows)
+    counts=report["状態"].value_counts().to_dict() if len(report) else {}
+    return {
+        "date":date_iso,
+        "total":int(len(report)),
+        "completed":int(counts.get("照合完了",0)),
+        "already":int(counts.get("照合済み",0)),
+        "failed":int(counts.get("未公開・取得失敗",0)+counts.get("取得失敗",0)),
+        "no_prediction":int(counts.get("予想履歴なし",0)),
+        "report":report,
+    }
 
 def settled_latest(history):
     h=norm_history(history)

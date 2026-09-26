@@ -69,3 +69,16 @@ Streamlit Community CloudはGitHubの更新を検知すると通常は自動で�
 4. Repository permissions → Contents → Read and write。
 5. Streamlitの Manage app → Settings → Secrets に設定例を貼り付け。
 6. 本物のtokenはGitHubへアップロードしない。
+
+
+## Cloud Ver.1.6.2 更新
+
+GitHubへ次のファイルを差し替えてください。
+
+- streamlit_app.py
+- evaluation_store.py
+- README.md
+- CLOUD_DEPLOY手順.md
+
+Ver.1.6.2では答え合わせがレース単位ではなく、
+開催日単位の一括処理になりました。
