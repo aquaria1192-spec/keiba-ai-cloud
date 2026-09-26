@@ -1,0 +1,62 @@
+name: Keiba AI automatic pre-race predictions
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto / morning / pre_race / settle"
+        required: false
+        default: "auto"
+      target_date:
+        description: "YYYY-MM-DD (blank = today JST)"
+        required: false
+        default: ""
+
+  schedule:
+    # GitHub cron is UTC.
+    # 08:30 JST on Sat/Sun/Mon (previous UTC day 23:30).
+    - cron: "30 23 * * 5,6,0"
+    # Every 20 minutes from 09:00 to 16:40 JST on Sat/Sun/Mon.
+    - cron: "*/20 0-7 * * 6,0,1"
+    # 17:30 JST on Sat/Sun/Mon: automatic result settlement.
+    - cron: "30 8 * * 6,0,1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keiba-ai-prediction-automation
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout app branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run automatic prediction / settlement
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          KEIBA_HISTORY_BRANCH: prediction-history
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          DATE="${{ github.event.inputs.target_date }}"
+          if [ -z "$MODE" ]; then MODE="auto"; fi
+          if [ -n "$DATE" ]; then
+            python automation_runner.py --mode "$MODE" --date "$DATE"
+          else
+            python automation_runner.py --mode "$MODE"
+          fi
