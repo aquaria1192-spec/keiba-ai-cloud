@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import base64
 import hashlib
+import json
 import re
 
 import numpy as np
@@ -16,6 +17,9 @@ from auto_data_builder import _session, VENUE_CODE, _flatten_columns, _find_col
 from race_day_context import (
     _result_url_from_entry, parse_jra_result_html,
     collect_official_entry_urls
+)
+from payout_tools import (
+    parse_jra_payouts_html, settle_plan, ticket_results_to_json
 )
 
 BASE = Path(__file__).resolve().parent
@@ -65,6 +69,10 @@ COLS = [
     "win_prob","top3_prob","base_ai_index","day_adjustment","ai_index",
     "odds","popularity","body_weight","body_weight_diff",
     "snapshot_type","post_time","minutes_before_post","auto_generated",
+    "bet_style","bet_budget","bet_plan_json",
+    "bet_stake","bet_payout","bet_profit","bet_roi",
+    "bet_hit_count","bet_ticket_count","bet_refund_count",
+    "bet_status","bet_ticket_results_json","bet_settled_at",
     "actual_finish","actual_win","actual_top3","settled_at","result_url",
 ]
 
@@ -77,7 +85,9 @@ def norm_history(df):
     out=df.copy()
     text_cols=[
         "snapshot_id","recorded_at","app_version","date","course","race_no",
-        "race_name","surface","going","horse_name","mark","snapshot_type","post_time","settled_at","result_url",
+        "race_name","surface","going","horse_name","mark","snapshot_type","post_time",
+        "bet_style","bet_plan_json","bet_status","bet_ticket_results_json","bet_settled_at",
+        "settled_at","result_url",
     ]
     for c in COLS:
         if c not in out.columns:
@@ -182,7 +192,7 @@ def numtext(v):
     x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
     return "" if pd.isna(x) else f"{float(x):.8f}"
 
-def prediction_snapshot(detail,app_version="1.6.2"):
+def prediction_snapshot(detail,app_version="1.7.1"):
     if detail is None or len(detail)==0:
         return blank_history()
 
@@ -201,6 +211,8 @@ def prediction_snapshot(detail,app_version="1.6.2"):
             numtext(r.get("top3_prob")),numtext(r.get("ai_index")),
             numtext(r.get("odds")),numtext(r.get("body_weight")),
             str(r.get("going","")),
+            str(r.get("bet_style","")),str(r.get("bet_budget","")),
+            str(r.get("bet_plan_json","")),
         ]))
     digest=hashlib.sha256("\n".join(hash_rows).encode("utf-8")).hexdigest()[:16]
     sid=f"{date}|{course}|{race_no}|{digest}"
@@ -225,12 +237,19 @@ def prediction_snapshot(detail,app_version="1.6.2"):
             "post_time":r.get("post_time",""),
             "minutes_before_post":r.get("minutes_before_post",np.nan),
             "auto_generated":r.get("auto_generated",False),
+            "bet_style":r.get("bet_style",""),
+            "bet_budget":r.get("bet_budget",np.nan),
+            "bet_plan_json":r.get("bet_plan_json",""),
+            "bet_stake":np.nan,"bet_payout":np.nan,"bet_profit":np.nan,
+            "bet_roi":np.nan,"bet_hit_count":np.nan,"bet_ticket_count":np.nan,
+            "bet_refund_count":np.nan,"bet_status":"",
+            "bet_ticket_results_json":"","bet_settled_at":"",
             "actual_finish":np.nan,"actual_win":np.nan,"actual_top3":np.nan,
             "settled_at":"","result_url":"",
         })
     return norm_history(pd.DataFrame(rows))
 
-def save_prediction_if_new(backend,detail,app_version="1.6.2"):
+def save_prediction_if_new(backend,detail,app_version="1.7.1"):
     snap=prediction_snapshot(detail,app_version)
     if snap.empty:
         return {"saved":False,"message":"予想データなし"}
@@ -243,8 +262,10 @@ def save_prediction_if_new(backend,detail,app_version="1.6.2"):
     return {"saved":True,"message":"記録しました","snapshot_id":sid}
 
 def generic_result_parse(html):
+    payout_info=parse_jra_payouts_html(html)
     parsed=parse_jra_result_html(html)
     if len(parsed.get("rows",pd.DataFrame())):
+        parsed["payout_info"]=payout_info
         return parsed
     try:
         tabs=pd.read_html(StringIO(html))
@@ -264,8 +285,8 @@ def generic_result_parse(html):
             if fm and nm:
                 rows.append({"finish":int(fm.group(1)),"horse_no":int(nm.group(1))})
         if rows:
-            return {"rows":pd.DataFrame(rows)}
-    return {"rows":pd.DataFrame()}
+            return {"rows":pd.DataFrame(rows),"payout_info":payout_info}
+    return {"rows":pd.DataFrame(),"payout_info":payout_info}
 
 def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
     s=_session()
@@ -348,6 +369,36 @@ def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_m
         " JRA公式結果が公開済みの場合は「最新データに更新」を1回押してから再試行してください。"
         f" 詳細: {detail}"
     )
+
+def apply_bet_settlement(hist,mask,result,settled_at):
+    snap=hist.loc[mask]
+    if snap.empty:
+        return {
+            "status":"買い目なし","stake":0,"payout":0,"profit":0,"roi":np.nan
+        }
+
+    plan_json=""
+    for v in snap["bet_plan_json"].astype(str):
+        if v.strip() and v.strip() not in ("nan","[]"):
+            plan_json=v
+            break
+
+    settled=settle_plan(plan_json,result.get("payout_info") or {})
+    values={
+        "bet_stake":settled.get("stake",0),
+        "bet_payout":settled.get("payout",0),
+        "bet_profit":settled.get("profit",0),
+        "bet_roi":settled.get("roi",np.nan),
+        "bet_hit_count":settled.get("hit_count",0),
+        "bet_ticket_count":settled.get("ticket_count",0),
+        "bet_refund_count":settled.get("refund_count",0),
+        "bet_status":settled.get("status",""),
+        "bet_ticket_results_json":ticket_results_to_json(settled.get("tickets",[])),
+        "bet_settled_at":settled_at,
+    }
+    for c,v in values.items():
+        hist.loc[mask,c]=v
+    return settled
 
 def settle_latest_snapshot(backend,date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
     hist=backend.load()
@@ -505,9 +556,21 @@ def settle_day_snapshots(
 
         # Already completely/meaningfully settled.
         if int(actual.notna().sum()) >= 3:
+            def _first_num(col):
+                x=pd.to_numeric(snap[col],errors="coerce").dropna()
+                return float(x.iloc[0]) if len(x) else np.nan
+            stake=_first_num("bet_stake")
+            payout=_first_num("bet_payout")
+            profit=_first_num("bet_profit")
+            roi=_first_num("bet_roi")
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合済み","照合頭数":int(actual.notna().sum()),
+                "購入額":0 if pd.isna(stake) else int(stake),
+                "払戻額":0 if pd.isna(payout) else int(payout),
+                "収支":0 if pd.isna(profit) else int(profit),
+                "回収率":"" if pd.isna(roi) else f"{roi:.1f}%",
+                "馬券結果":str(snap["bet_status"].iloc[0]),
                 "取得元":"保存済み",
                 "メッセージ":"すでに答え合わせ済みです。",
             })
@@ -555,10 +618,19 @@ def settle_day_snapshots(
                 })
                 continue
 
+            bet=apply_bet_settlement(hist,mask,result,now)
             changed=True
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合完了","照合頭数":matched,
+                "購入額":bet.get("stake",0),
+                "払戻額":bet.get("payout",0),
+                "収支":bet.get("profit",0),
+                "回収率":(
+                    "" if pd.isna(bet.get("roi",np.nan))
+                    else f"{float(bet.get('roi')):.1f}%"
+                ),
+                "馬券結果":bet.get("status",""),
                 "取得元":result.get("source",""),
                 "メッセージ":"",
             })
@@ -593,13 +665,17 @@ def settled_latest(history):
     h=h[h["actual_finish_num"].notna()].copy()
     if h.empty:
         return h
+    pri={"pre_race":3,"morning":2,"manual":1}
+    h["_pri"]=h["snapshot_type"].map(pri).fillna(0)
+    h["_dt"]=pd.to_datetime(h["recorded_at"],errors="coerce")
     racecols=["date","course","race_no"]
-    snap=h[["snapshot_id","recorded_at"]+racecols].drop_duplicates()
-    snap["_dt"]=pd.to_datetime(snap["recorded_at"],errors="coerce")
-    snap=snap.sort_values("_dt").groupby(racecols,as_index=False).tail(1)
+    snap=h[
+        ["snapshot_id","recorded_at","snapshot_type","_pri","_dt"]+racecols
+    ].drop_duplicates()
+    snap=snap.sort_values(["date","course","race_no","_pri","_dt"])
+    snap=snap.groupby(racecols,as_index=False).tail(1)
     keep=set(snap["snapshot_id"].astype(str))
     return h[h["snapshot_id"].astype(str).isin(keep)].copy()
-
 def evaluation_metrics(history):
     h=settled_latest(history)
     if h.empty:
@@ -607,6 +683,8 @@ def evaluation_metrics(history):
             "races":0,"horses":0,"main_win_rate":np.nan,"main_top3_rate":np.nan,
             "brier_win":np.nan,"brier_top3":np.nan,"log_loss":np.nan,
             "approx_main_roi":np.nan,
+            "bet_races":0,"bet_stake":0,"bet_payout":0,"bet_profit":0,
+            "bet_roi":np.nan,
         },h
 
     for c in ["win_prob","top3_prob","actual_win","actual_top3","odds"]:
@@ -619,25 +697,36 @@ def evaluation_metrics(history):
     winner=h[h["actual_win"]==1]
     ll=float((-np.log(winner["win_prob"].clip(eps,1))).mean()) if len(winner) else np.nan
 
-    roi=np.nan
+    approx=np.nan
     if len(main):
         odds=main["odds"]
         valid=odds.notna()
         if valid.any():
             returns=(main.loc[valid,"actual_win"].fillna(0)*odds[valid]*100).sum()
-            roi=float(returns/(int(valid.sum())*100)*100)
+            approx=float(returns/(int(valid.sum())*100)*100)
+
+    bets=h.sort_values("recorded_at").drop_duplicates("snapshot_id",keep="last").copy()
+    bets["bet_stake"]=pd.to_numeric(bets["bet_stake"],errors="coerce")
+    bets["bet_payout"]=pd.to_numeric(bets["bet_payout"],errors="coerce")
+    exact=bets[
+        (bets["bet_status"].astype(str)=="確定") &
+        bets["bet_stake"].notna() & (bets["bet_stake"]>0)
+    ]
+    bet_stake=int(exact["bet_stake"].sum()) if len(exact) else 0
+    bet_payout=int(exact["bet_payout"].fillna(0).sum()) if len(exact) else 0
+    bet_profit=bet_payout-bet_stake
+    bet_roi=(bet_payout/bet_stake*100.0) if bet_stake else np.nan
 
     return {
-        "races":races,
-        "horses":int(len(h)),
+        "races":races,"horses":int(len(h)),
         "main_win_rate":float(main["actual_win"].mean()) if len(main) else np.nan,
         "main_top3_rate":float(main["actual_top3"].mean()) if len(main) else np.nan,
         "brier_win":float(np.mean((wp-h["actual_win"])**2)),
         "brier_top3":float(np.mean((tp-h["actual_top3"])**2)),
-        "log_loss":ll,
-        "approx_main_roi":roi,
+        "log_loss":ll,"approx_main_roi":approx,
+        "bet_races":int(len(exact)),"bet_stake":bet_stake,
+        "bet_payout":bet_payout,"bet_profit":bet_profit,"bet_roi":bet_roi,
     },h
-
 def mark_summary(history):
     h=settled_latest(history)
     if h.empty:
@@ -689,6 +778,74 @@ def calibration_summary(history):
     out=out.rename(columns={"horse_no":"頭数","win_prob":"平均予測勝率","actual_win":"実勝率"})
     out["差"]=out["実勝率"]-out["平均予測勝率"]
     return out
+
+def race_roi_summary(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    one=h.sort_values("recorded_at").drop_duplicates("snapshot_id",keep="last").copy()
+    for c in ["bet_stake","bet_payout","bet_profit","bet_roi"]:
+        one[c]=pd.to_numeric(one[c],errors="coerce")
+    one=one[one["bet_stake"].fillna(0)>0].copy()
+    if one.empty:
+        return pd.DataFrame()
+    return one[[
+        "date","course","race_no","snapshot_type","bet_style",
+        "bet_stake","bet_payout","bet_profit","bet_roi","bet_status"
+    ]].rename(columns={
+        "date":"日付","course":"競馬場","race_no":"レース",
+        "snapshot_type":"予想種別","bet_style":"買い方",
+        "bet_stake":"購入額","bet_payout":"払戻額",
+        "bet_profit":"収支","bet_roi":"回収率","bet_status":"精算状態",
+    }).sort_values(["日付","競馬場","レース"]).reset_index(drop=True)
+
+def daily_roi_summary(history):
+    r=race_roi_summary(history)
+    if r.empty:
+        return pd.DataFrame()
+    q=r[r["精算状態"]=="確定"].copy()
+    if q.empty:
+        return pd.DataFrame()
+    out=q.groupby("日付",as_index=False).agg({
+        "レース":"count","購入額":"sum","払戻額":"sum","収支":"sum"
+    }).rename(columns={"レース":"評価レース数"})
+    out["回収率"]=np.where(
+        out["購入額"]>0,out["払戻額"]/out["購入額"]*100,np.nan
+    )
+    return out.sort_values("日付",ascending=False).reset_index(drop=True)
+
+def bet_type_roi_summary(history):
+    h=settled_latest(history)
+    if h.empty:
+        return pd.DataFrame()
+    one=h.sort_values("recorded_at").drop_duplicates("snapshot_id",keep="last")
+    rows=[]
+    for _,r in one.iterrows():
+        if str(r.get("bet_status",""))!="確定":
+            continue
+        try:
+            tickets=json.loads(str(r.get("bet_ticket_results_json","") or "[]"))
+        except Exception:
+            tickets=[]
+        for t in tickets:
+            rows.append({
+                "券種":str(t.get("券種","")),
+                "購入額":int(t.get("購入額",0) or 0),
+                "払戻額":int(t.get("払戻額",0) or 0),
+                "的中":1 if str(t.get("結果",""))=="的中" else 0,
+                "返還":1 if str(t.get("結果",""))=="返還" else 0,
+            })
+    if not rows:
+        return pd.DataFrame()
+    d=pd.DataFrame(rows)
+    out=d.groupby("券種",as_index=False).agg({
+        "購入額":"sum","払戻額":"sum","的中":"sum","返還":"sum"
+    })
+    out["収支"]=out["払戻額"]-out["購入額"]
+    out["回収率"]=np.where(
+        out["購入額"]>0,out["払戻額"]/out["購入額"]*100,np.nan
+    )
+    return out.sort_values("購入額",ascending=False).reset_index(drop=True)
 
 def training_candidate_csv(history):
     h=settled_latest(history)

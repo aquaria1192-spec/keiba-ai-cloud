@@ -24,8 +24,11 @@ from race_day_context import (
     fetch_day_contexts, apply_official_going, apply_day_adjustments
 )
 from evaluation_store import (
-    prediction_snapshot, norm_history, merge_histories
+    prediction_snapshot, norm_history, merge_histories,
+    apply_bet_settlement
 )
+from betting_tools import race_bet_plan
+from payout_tools import plan_to_json
 from github_branch_store import GitHubBranchStore
 
 BASE=Path(__file__).resolve().parent
@@ -34,6 +37,13 @@ JST=ZoneInfo("Asia/Tokyo")
 
 HISTORY_PATH="automation_data/pre_race_predictions.csv"
 SCHEDULE_PREFIX="automation_data/schedules"
+AUTO_BET_STYLE=os.environ.get("KEIBA_BET_STYLE","標準")
+try:
+    AUTO_BET_BUDGET=max(
+        100,int(os.environ.get("KEIBA_BET_BUDGET","2000"))//100*100
+    )
+except Exception:
+    AUTO_BET_BUDGET=2000
 
 def now_jst():
     return datetime.now(JST)
@@ -159,7 +169,15 @@ def snapshot_race(
     detail["post_time"]=post_time
     detail["minutes_before_post"]=minutes_before
     detail["auto_generated"]=True
-    snap=prediction_snapshot(detail,app_version="1.7")
+
+    plan,meta=race_bet_plan(
+        detail,style=AUTO_BET_STYLE,budget_yen=AUTO_BET_BUDGET
+    )
+    detail["bet_style"]=AUTO_BET_STYLE
+    detail["bet_budget"]=int(meta.get("予算",AUTO_BET_BUDGET))
+    detail["bet_plan_json"]=plan_to_json(plan)
+
+    snap=prediction_snapshot(detail,app_version="1.7.1")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):
@@ -170,6 +188,42 @@ def snapshot_race(
         snap["minutes_before_post"]=minutes_before
         snap["auto_generated"]=True
     return snap
+
+def backfill_missing_bet_plans(existing):
+    """
+    Ver.1.7 may already have created a morning snapshot without bet_plan_json.
+    Build the plan only from that frozen pre-race prediction, never from results.
+    """
+    if existing is None or len(existing)==0:
+        return existing,False
+
+    out=existing.copy()
+    changed=False
+    for sid,g in out.groupby("snapshot_id",sort=False):
+        stype=str(g.iloc[0].get("snapshot_type",""))
+        if stype not in ("morning","pre_race"):
+            continue
+        current=str(g.iloc[0].get("bet_plan_json","") or "").strip()
+        if current not in ("","nan","[]"):
+            continue
+
+        detail=g.copy().rename(columns={
+            "date":"開催日","course":"競馬場","race_no":"レース",
+            "mark":"印","rank":"順位",
+        })
+        # betting_tools expects these fields.
+        if "評価" not in detail:
+            detail["評価"]=""
+        plan,meta=race_bet_plan(
+            detail,style=AUTO_BET_STYLE,budget_yen=AUTO_BET_BUDGET
+        )
+        pj=plan_to_json(plan)
+        mask=out["snapshot_id"].astype(str)==str(sid)
+        out.loc[mask,"bet_style"]=AUTO_BET_STYLE
+        out.loc[mask,"bet_budget"]=int(meta.get("予算",AUTO_BET_BUDGET))
+        out.loc[mask,"bet_plan_json"]=pj
+        changed=True
+    return out,changed
 
 def choose_due(schedule,target_date,now,mode,existing):
     if mode=="morning":
@@ -242,6 +296,13 @@ def run_predictions(mode,target_date,store):
         return
 
     existing=load_existing(store)
+    existing,backfilled=backfill_missing_bet_plans(existing)
+    if backfilled:
+        save_history(
+            store,existing,
+            f"Backfill saved bet plans {target_date.isoformat()}"
+        )
+        print("Backfilled bet plans for existing Ver.1.7 snapshots.")
     now=now_jst()
     due=choose_due(schedule,target_date,now,mode,existing)
     if not due:
@@ -284,6 +345,12 @@ def settle_all(target_date,store):
     from evaluation_store import fetch_race_result
 
     hist=load_existing(store)
+    hist,backfilled=backfill_missing_bet_plans(hist)
+    if backfilled:
+        save_history(
+            store,hist,
+            f"Backfill saved bet plans {target_date.isoformat()}"
+        )
     if hist.empty:
         print("No pre-race history.")
         return
@@ -309,7 +376,12 @@ def settle_all(target_date,store):
     for _,m in chosen.iterrows():
         sid=str(m["snapshot_id"])
         mask=hist["snapshot_id"].astype(str)==sid
-        if pd.to_numeric(hist.loc[mask,"actual_finish"],errors="coerce").notna().sum() >= 3:
+        finish_done=(
+            pd.to_numeric(hist.loc[mask,"actual_finish"],errors="coerce")
+            .notna().sum() >= 3
+        )
+        bet_done=(hist.loc[mask,"bet_status"].astype(str)=="確定").any()
+        if finish_done and bet_done:
             continue
         course=str(m["course"]); race_no=str(m["race_no"])
         try:
@@ -336,9 +408,18 @@ def settle_all(target_date,store):
                 hist.at[idx,"settled_at"]=settled_at
                 hist.at[idx,"result_url"]=result.get("result_url","")
                 matched+=1
-            if matched>=3:
+            if matched>=3 or finish_done:
+                bet=apply_bet_settlement(
+                    hist,mask,result,settled_at
+                )
                 changed=True
-                print(f"SETTLED {course} {race_no}: {matched}")
+                roi=bet.get("roi",np.nan)
+                roi_text="-" if pd.isna(roi) else f"{float(roi):.1f}%"
+                print(
+                    f"SETTLED {course} {race_no}: "
+                    f"stake={bet.get('stake',0)} "
+                    f"payout={bet.get('payout',0)} ROI={roi_text}"
+                )
             else:
                 print(f"INSUFFICIENT {course} {race_no}")
         except Exception as e:

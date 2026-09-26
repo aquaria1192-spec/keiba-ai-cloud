@@ -12,6 +12,7 @@ from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day
 from betting_tools import race_bet_plan, mark_legend
+from payout_tools import plan_to_json
 from race_day_context import (
     fetch_day_contexts, apply_official_going,
     fetch_same_day_bias, apply_day_adjustments
@@ -20,6 +21,7 @@ from evaluation_store import (
     HistoryBackend, save_prediction_if_new, settle_day_snapshots,
     evaluation_metrics, mark_summary, condition_summary,
     calibration_summary, training_candidate_csv,
+    race_roi_summary, daily_roi_summary, bet_type_roi_summary,
     load_public_auto_history, merge_histories
 )
 
@@ -28,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.7",
+    page_title="競馬予想AI Cloud Ver.1.7.1",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -195,6 +197,7 @@ def show_prediction(detail, context, bias):
             plan.to_csv(index=False).encode("utf-8-sig"),
             "買い目.csv","text/csv",use_container_width=True
         )
+    return plan,meta
 
 def default_race_date():
     now=datetime.now(JST)
@@ -204,7 +207,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.7")
+st.title("🏇 競馬予想AI Cloud Ver.1.7.1")
 st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
 
 st.markdown("""
@@ -333,19 +336,24 @@ if features is not None and len(features):
                 detail=apply_day_adjustments(
                     detail,context,bias,enabled=use_day_adjustment
                 )
-            show_prediction(detail,context,bias)
+            shown_plan,shown_meta=show_prediction(detail,context,bias)
+            detail["bet_style"]=shown_meta.get("スタイル","")
+            detail["bet_budget"]=shown_meta.get("予算",0)
+            detail["bet_plan_json"]=plan_to_json(shown_plan)
 
             fingerprint=(
                 date_iso,str(course),str(race),
                 tuple(
                     (str(r.get("horse_no","")),round(float(r.get("win_prob",0)),8),
-                     str(r.get("印","")),str(r.get("odds","")))
+                     str(r.get("印","")),str(r.get("odds","")),
+                     str(r.get("bet_style","")),str(r.get("bet_budget","")),
+                     str(r.get("bet_plan_json","")))
                     for _,r in detail.sort_values("horse_no").iterrows()
                 )
             )
             if st.session_state.get("_saved_fp_16") != fingerprint:
                 try:
-                    si=save_prediction_if_new(history_backend,detail,"1.6.2")
+                    si=save_prediction_if_new(history_backend,detail,"1.7.1")
                     st.session_state["_saved_fp_16"]=fingerprint
                     if si.get("saved"):
                         st.caption("📝 この予想を評価履歴へ記録しました。")
@@ -471,13 +479,26 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
             q[pd.to_numeric(q["actual_finish"],errors="coerce").notna()]
             [["course","race_no"]].drop_duplicates().shape[0]
         )
+        day_one=q.sort_values("recorded_dt").drop_duplicates("snapshot_id",keep="last")
+        exact=day_one[day_one["bet_status"].astype(str)=="確定"].copy()
+        exact_stake=int(pd.to_numeric(exact["bet_stake"],errors="coerce").fillna(0).sum()) if len(exact) else 0
+        exact_payout=int(pd.to_numeric(exact["bet_payout"],errors="coerce").fillna(0).sum()) if len(exact) else 0
+        exact_roi=(exact_payout/exact_stake*100) if exact_stake else np.nan
         st.write(
             f"最新日：**{latest_date}**　／　対象 {races}R　／　"
             f"朝保存 {morning}R　／　発走前保存 {near}R　／　答え合わせ済み {settled}R"
         )
+        if exact_stake:
+            st.write(
+                f"**確定馬券成績**　購入 {exact_stake:,}円　／　"
+                f"払戻 {exact_payout:,}円　／　"
+                f"収支 {exact_payout-exact_stake:+,}円　／　"
+                f"回収率 {exact_roi:.1f}%"
+            )
         show_cols=[
             "course","race_no","snapshot_type","post_time",
-            "minutes_before_post","recorded_at","actual_finish"
+            "minutes_before_post","recorded_at",
+            "bet_stake","bet_payout","bet_profit","bet_roi","bet_status"
         ]
         last=(
             q.sort_values("recorded_dt")
@@ -511,14 +532,49 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
             a,b,c=st.columns(3)
             a.metric("勝者Log Loss","-" if pd.isna(metrics["log_loss"]) else f"{metrics['log_loss']:.3f}")
             b.metric("3着内Brier","-" if pd.isna(metrics["brier_top3"]) else f"{metrics['brier_top3']:.4f}")
-            c.metric("◎単勝参考回収率","-" if pd.isna(metrics["approx_main_roi"]) else f"{metrics['approx_main_roi']:.1f}%")
+            c.metric("確定回収率","-" if pd.isna(metrics["bet_roi"]) else f"{metrics['bet_roi']:.1f}%")
+
+            if metrics["bet_races"]>0:
+                a,b,c=st.columns(3)
+                a.metric("購入総額",f"{metrics['bet_stake']:,}円")
+                b.metric("払戻総額",f"{metrics['bet_payout']:,}円")
+                c.metric("収支",f"{metrics['bet_profit']:+,}円")
             st.caption(
-                "Brier / Log Lossは小さいほど良好。参考回収率は予想保存時オッズ換算で、"
-                "確定払戻額そのものではありません。"
+                "確定回収率はレース前に固定保存した買い目とJRA公式の確定払戻金で計算します。"
+                "返還馬を含む買い目は購入額を返還として計上します。"
             )
 
-            t1,t2,t3,t4=st.tabs(["印別成績","競馬場・距離別","確率校正","再学習候補"])
+            t1,t2,t3,t4,t5=st.tabs(
+                ["回収率","印別成績","競馬場・距離別","確率校正","再学習候補"]
+            )
             with t1:
+                rr=race_roi_summary(history)
+                if len(rr):
+                    show=rr.copy()
+                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
+                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
+                    )
+                    st.markdown("##### レース別")
+                    st.dataframe(show,use_container_width=True,hide_index=True)
+
+                dd=daily_roi_summary(history)
+                if len(dd):
+                    show=dd.copy()
+                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
+                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
+                    )
+                    st.markdown("##### 日別")
+                    st.dataframe(show,use_container_width=True,hide_index=True)
+
+                bt=bet_type_roi_summary(history)
+                if len(bt):
+                    show=bt.copy()
+                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
+                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
+                    )
+                    st.markdown("##### 券種別")
+                    st.dataframe(show,use_container_width=True,hide_index=True)
+            with t2:
                 q=mark_summary(history)
                 if len(q):
                     for col in ["勝率","3着内率","平均予測勝率"]:
@@ -526,7 +582,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                             lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
-            with t2:
+            with t3:
                 q=condition_summary(history)
                 if len(q):
                     for col in ["◎勝率","◎3着内率","◎平均予測勝率"]:
@@ -534,7 +590,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                             lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
-            with t3:
+            with t4:
                 q=calibration_summary(history)
                 if len(q):
                     for col in ["平均予測勝率","実勝率","差"]:
@@ -543,7 +599,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
                     st.caption("予測勝率と実勝率が近いほど、確率予測が適切に校正されています。")
-            with t4:
+            with t5:
                 cand=training_candidate_csv(history)
                 st.write(f"再学習候補：**{metrics['races']}レース / {len(cand)}頭**")
                 if len(cand):
@@ -575,7 +631,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.7の自己評価について"):
+with st.expander("Ver.1.7.1の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -585,7 +641,7 @@ with st.expander("Ver.1.7の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.7の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.7.1の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
