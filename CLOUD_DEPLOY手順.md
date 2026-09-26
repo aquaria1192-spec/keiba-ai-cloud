@@ -1,0 +1,32 @@
+# Streamlit Community Cloud 公開手順
+
+このフォルダはそのままGitHubへアップロードするクラウド専用版です。
+
+## 1. GitHub
+1. GitHubで新しいリポジトリを作成します。
+2. このフォルダの中身をすべてアップロードします。
+3. `streamlit_app.py`、`requirements.txt`、`data` フォルダも必ず含めます。
+
+## 2. Streamlit Community Cloud
+1. https://share.streamlit.io/ にGitHubでログインします。
+2. `Create app` を押します。
+3. 作成したGitHubリポジトリを選択します。
+4. Branch は `main`。
+5. Main file path は `streamlit_app.py`。
+6. `Advanced settings` を開きます。
+7. **Python version は 3.13** を選択します。
+8. Deploy を押します。
+
+## 3. スマホ
+公開後は `https://xxxxx.streamlit.app/` のURLが発行されます。
+そのURLをiPhone/Androidで開けば、PCなしで利用できます。
+
+ホーム画面に追加しておくと便利です。
+
+## 重要
+学習済みAIはPython 3.13 / scikit-learn 1.8.0で作成しています。
+Streamlit CloudのPythonは必ず3.13を選んでください。
+
+クラウドのローカルファイルは永続保存を前提にしていません。
+本版は学習済みAIと集約済み特徴量をリポジトリに同梱しているため、
+サーバー再起動後に大規模再学習する必要はありません。
