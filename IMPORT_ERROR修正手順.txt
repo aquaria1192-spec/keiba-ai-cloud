@@ -1,0 +1,17 @@
+Ver.1.7.1 ImportError 修正用
+
+GitHubの keiba-ai-cloud / main ブランチに、このZIPの内容を上書きしてください。
+
+必須:
+- streamlit_app.py
+- evaluation_store.py
+- payout_tools.py  ← 新規ファイル。必ずrootへ追加
+- automation_runner.py
+- .github/workflows/keiba_auto_predictions.yml
+
+特に payout_tools.py が GitHubのrootに無いと Ver.1.7.1 は起動できません。
+
+アップロード後:
+1. Commit changes
+2. Streamlitアプリを開く
+3. 自動更新されない場合は Manage app → Reboot app
