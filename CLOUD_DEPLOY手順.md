@@ -30,3 +30,20 @@ Streamlit CloudのPythonは必ず3.13を選んでください。
 クラウドのローカルファイルは永続保存を前提にしていません。
 本版は学習済みAIと集約済み特徴量をリポジトリに同梱しているため、
 サーバー再起動後に大規模再学習する必要はありません。
+
+
+## Ver.1.5へ更新する場合
+
+すでに `keiba-ai-cloud` を公開済みの場合は、
+Ver.1.5のファイル一式を同じGitHubリポジトリへ上書きしてください。
+
+特に次のファイルは必ず更新してください。
+
+- streamlit_app.py
+- cloud_data_builder.py
+- cloud_features.py
+- race_day_context.py（新規）
+- data/cloud_feature_store.joblib
+- README.md
+
+Streamlit Community CloudはGitHubの更新を検知すると通常は自動で再起動します。

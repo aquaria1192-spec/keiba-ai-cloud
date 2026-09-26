@@ -5,19 +5,24 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import joblib
 import pandas as pd
+import numpy as np
 import streamlit as st
 
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day
 from betting_tools import race_bet_plan, mark_legend
+from race_day_context import (
+    fetch_day_contexts, apply_official_going,
+    fetch_same_day_bias, apply_day_adjustments
+)
 
 BASE = Path(__file__).resolve().parent
 MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.4",
+    page_title="競馬予想AI Cloud Ver.1.5",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -26,9 +31,10 @@ st.set_page_config(
 st.markdown("""
 <style>
 #MainMenu{visibility:hidden} footer{visibility:hidden}
-.block-container{padding-top:.8rem;padding-bottom:2.5rem;max-width:920px}
+.block-container{padding-top:.8rem;padding-bottom:2.5rem;max-width:960px}
 .hero{padding:1rem;border:1px solid #d7e6dd;border-radius:14px;background:#f7fbf8;margin-bottom:1rem}
 .step{font-size:1.25rem;font-weight:750}
+.condition{padding:.7rem .8rem;border:1px solid #e2e8e4;border-radius:12px;margin:.35rem 0}
 button,[role="button"]{min-height:46px}
 div[data-baseweb="select"]>div{min-height:46px}
 input{font-size:16px!important}
@@ -56,9 +62,19 @@ def load_cloud_assets():
     return model, store
 
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_cached(date_iso: str):
-    d = pd.Timestamp(date_iso).date()
-    return fetch_entries_cloud(d)
+def fetch_entries_cached(date_iso: str):
+    return fetch_entries_cloud(pd.Timestamp(date_iso).date())
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_context_cached(date_iso: str, courses_tuple):
+    return fetch_day_contexts(pd.Timestamp(date_iso).date(), list(courses_tuple))
+
+@st.cache_data(ttl=90, show_spinner=False)
+def fetch_bias_cached(date_iso, course, race_no, surface, official_items):
+    official=dict(official_items)
+    return fetch_same_day_bias(
+        pd.Timestamp(date_iso).date(),course,int(race_no),surface,official
+    )
 
 def pct(v):
     return "-" if pd.isna(v) else f"{float(v)*100:.1f}%"
@@ -70,49 +86,98 @@ def race_num(v):
         return 999
 
 def race_label(race_no, df):
-    g = df[df["race_no"].astype(str)==str(race_no)]
+    g=df[df["race_no"].astype(str)==str(race_no)]
     if g.empty:
         return str(race_no)
-    r = g.iloc[0]
-    name = str(r.get("race_name","")).strip()
+    r=g.iloc[0]
+    name=str(r.get("race_name","")).strip()
     return f"{race_no}　{name}" if name and name.lower()!="nan" else str(race_no)
 
-def predict_race(feature_df, date_iso, models, weights):
-    return batch_predict_day(feature_df, date_iso, models, weights)
+def nfmt(v, suffix="", digits=1):
+    x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
+    return "-" if pd.isna(x) else f"{x:.{digits}f}{suffix}"
 
-def show_prediction(detail):
-    rg = detail.sort_values("順位").copy()
-    label = str(rg.iloc[0].get("レース表示",""))
+def show_day_context(contexts):
+    if not contexts:
+        return
+    st.markdown("#### 当日コンディション")
+    for course,ctx in contexts.items():
+        weather=ctx.get("weather") or {}
+        valid=ctx.get("is_target_date",False)
+        date_note="" if valid else f"（JRA表示日 {ctx.get('race_date') or '-'}）"
+        with st.expander(f"{course}競馬場　当日馬場・天気",expanded=False):
+            c1,c2,c3=st.columns(3)
+            c1.metric("芝",ctx.get("turf_going") or "-")
+            c2.metric("ダート",ctx.get("dirt_going") or "-")
+            c3.metric("天気",weather.get("weather_text") or ctx.get("jra_weather") or "-")
+            st.write(
+                f"**JRA馬場情報** {date_note}　"
+                f"含水率 芝：{nfmt(ctx.get('turf_goal'),'%')} / {nfmt(ctx.get('turf_corner'),'%')}　"
+                f"ダート：{nfmt(ctx.get('dirt_goal'),'%')} / {nfmt(ctx.get('dirt_corner'),'%')}"
+            )
+            cushion=ctx.get("cushion")
+            if pd.notna(pd.to_numeric(pd.Series([cushion]),errors="coerce").iloc[0]):
+                st.write(f"芝クッション値：**{float(cushion):.1f}**")
+            st.write(
+                f"**14時頃の天気予報**　"
+                f"{nfmt(weather.get('temperature_c'),'℃')}　"
+                f"降水 {nfmt(weather.get('precipitation_mm'),'mm')}　"
+                f"降水確率 {nfmt(weather.get('precip_probability'),'%',0)}　"
+                f"風 {nfmt(weather.get('wind_kmh'),'km/h')}"
+            )
+            if ctx.get("used_course"):
+                st.caption("使用コース："+str(ctx["used_course"]))
+            if ctx.get("turf_state"):
+                st.caption("芝の状態："+str(ctx["turf_state"]))
+            if not valid:
+                st.warning("JRA馬場情報が予想日と一致していないため、この値はAIの馬場状態には上書きしていません。")
+
+def show_prediction(detail, context, bias):
+    rg=detail.sort_values("順位").copy()
+    label=str(rg.iloc[0].get("レース表示",""))
     st.subheader(label)
+
+    st.markdown("#### 当日馬場・バイアス")
+    c1,c2,c3=st.columns(3)
+    c1.metric("馬場",str(rg.iloc[0].get("going","")) or "-")
+    c2.metric("当日傾向",(bias or {}).get("summary","データなし"))
+    weather=(context or {}).get("weather") or {}
+    c3.metric("天気",weather.get("weather_text") or (context or {}).get("jra_weather") or "-")
+    st.caption(
+        "JRA公式の馬場状態は学習済みAIの going 特徴量へ直接反映。"
+        "含水率・クッション値・当日バイアスは別の「当日補正」として表示しています。"
+    )
+
     st.markdown("#### 全出走馬の印付き予想")
     st.caption(mark_legend())
 
-    cols = ["順位","印","評価","horse_no","horse_name",
-            "win_prob","top3_prob","ai_index","odds","expected_value"]
-    q = rg[[c for c in cols if c in rg.columns]].rename(columns={
+    cols=["順位","印","評価","horse_no","horse_name",
+          "win_prob","top3_prob","基礎AI指数","当日補正","ai_index",
+          "odds","expected_value","補正理由"]
+    q=rg[[c for c in cols if c in rg.columns]].rename(columns={
         "horse_no":"馬番","horse_name":"馬名","win_prob":"勝率",
         "top3_prob":"3着内率","ai_index":"AI指数",
         "odds":"単勝オッズ","expected_value":"AI期待値",
     })
     for c in ["勝率","3着内率"]:
         if c in q:
-            q[c] = pd.to_numeric(q[c],errors="coerce").map(pct)
-    for c in ["AI指数","単勝オッズ","AI期待値"]:
+            q[c]=pd.to_numeric(q[c],errors="coerce").map(pct)
+    for c in ["基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
         if c in q:
-            q[c] = pd.to_numeric(q[c],errors="coerce").round(2)
-    st.dataframe(q, use_container_width=True, hide_index=True)
+            q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
+    st.dataframe(q,use_container_width=True,hide_index=True)
 
     st.markdown("#### 馬券の買い方")
-    c1,c2 = st.columns(2)
+    c1,c2=st.columns(2)
     with c1:
-        style = st.selectbox("買い方",["堅実","標準","攻め"],index=1,key="cloud_bet_style")
+        style=st.selectbox("買い方",["堅実","標準","攻め"],index=1,key="cloud_bet_style")
     with c2:
-        budget = st.number_input(
+        budget=st.number_input(
             "このレースの予算（円）",min_value=500,max_value=50000,
             value=2000,step=100,key="cloud_bet_budget"
         )
-    plan, meta = race_bet_plan(rg,style=style,budget_yen=int(budget))
-    st.write(f"**AI信頼度：{meta['信頼度']}**　{meta['コメント']}")
+    plan,meta=race_bet_plan(rg,style=style,budget_yen=int(budget))
+    st.write(f"**AI上位評価の差：{meta['信頼度']}**　{meta['コメント']}")
     if len(plan):
         st.dataframe(
             plan[["券種","買い目","金額","狙い","予算内比率"]],
@@ -126,116 +191,148 @@ def show_prediction(detail):
         )
 
 def default_race_date():
-    now = datetime.now(JST)
-    if now.weekday() == 5:
-        return now.date() if now.hour < 16 else now.date()+timedelta(days=1)
-    if now.weekday() == 6:
-        return now.date() if now.hour < 16 else now.date()+timedelta(days=6)
+    now=datetime.now(JST)
+    if now.weekday()==5:
+        return now.date() if now.hour<16 else now.date()+timedelta(days=1)
+    if now.weekday()==6:
+        return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.4")
-st.caption("PC・スマホ共通／URLを開くだけで利用できます")
+st.title("🏇 競馬予想AI Cloud Ver.1.5")
+st.caption("当日馬場・天気・馬体重・オッズ・馬場バイアス対応")
 
 st.markdown("""
 <div class="hero">
-<b>クラウド版はPCの起動操作が不要です。</b><br>
-① 出走データを取得<br>
+<b>「最新データに更新」で当日の条件を取り込みます。</b><br>
+① 出走表・オッズ・馬体重＋JRA馬場情報・天気を更新<br>
 ② 開催地 → レースを選択<br>
-③ 全頭印付き予想・買い目を確認
+③ 終了済み同条件レースから当日バイアスを算出<br>
+④ 全頭印付き予想・買い目を更新
 </div>
-""", unsafe_allow_html=True)
+""",unsafe_allow_html=True)
 
 try:
-    model_pkg, feature_store = load_cloud_assets()
+    model_pkg,feature_store=load_cloud_assets()
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
 
 with st.container(border=True):
-    st.markdown('<div class="step">① 出走データを取得</div>',unsafe_allow_html=True)
-    target_date = st.date_input("予想する開催日", value=default_race_date(), key="cloud_target_date")
-    c1,c2 = st.columns(2)
+    st.markdown('<div class="step">① 当日データを取得・更新</div>',unsafe_allow_html=True)
+    target_date=st.date_input("予想する開催日",value=default_race_date(),key="cloud_target_date")
+    c1,c2=st.columns(2)
     with c1:
-        get_clicked = st.button("出走データを取得", type="primary", use_container_width=True)
+        get_clicked=st.button("出走データを取得",type="primary",use_container_width=True)
     with c2:
-        refresh_clicked = st.button("最新データに更新", use_container_width=True)
+        refresh_clicked=st.button("最新データに更新",use_container_width=True)
 
     if refresh_clicked:
-        fetch_cached.clear()
-        get_clicked = True
+        fetch_entries_cached.clear()
+        fetch_context_cached.clear()
+        fetch_bias_cached.clear()
+        get_clicked=True
 
     if get_clicked:
         try:
-            with st.spinner("出走表を取得しています…"):
-                entries, info = fetch_cached(target_date.isoformat())
-                features = enrich_entries_cloud(entries, feature_store)
-            st.session_state["cloud_entries"] = entries
-            st.session_state["cloud_features"] = features
-            st.session_state["cloud_info"] = info
-            st.session_state.pop("cloud_prediction", None)
+            with st.spinner("出走表・馬場・天気を取得しています…"):
+                entries,info=fetch_entries_cached(target_date.isoformat())
+                courses=tuple(sorted(entries["course"].dropna().astype(str).unique()))
+                contexts=fetch_context_cached(target_date.isoformat(),courses)
+                entries,going_changed=apply_official_going(entries,contexts,target_date)
+                features=enrich_entries_cloud(entries,feature_store)
+
+            info["going_changed_rows"]=going_changed
+            info["body_weight_count"]=int(pd.to_numeric(entries["body_weight"],errors="coerce").notna().sum())
+            info["odds_count"]=int(pd.to_numeric(entries["odds"],errors="coerce").notna().sum())
+            st.session_state["cloud_entries"]=entries
+            st.session_state["cloud_features"]=features
+            st.session_state["cloud_info"]=info
+            st.session_state["cloud_contexts"]=contexts
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
-            st.error(f"出走データを取得できませんでした：{e}")
+            st.error(f"当日データを取得できませんでした：{e}")
 
-    info = st.session_state.get("cloud_info")
+    info=st.session_state.get("cloud_info")
     if info:
-        st.caption(f"取得日：{info['date']}　／　{info['races']}レース　／　{info['rows']}頭")
+        st.caption(
+            f"取得日：{info['date']}　／　{info['races']}レース　／　{info['rows']}頭　"
+            f"／ 馬体重 {info.get('body_weight_count',0)}頭　"
+            f"／ オッズ {info.get('odds_count',0)}頭"
+        )
         if info.get("excluded"):
             with st.expander("AI予想対象外のレース"):
-                for rid, reason in info["excluded"].items():
+                for rid,reason in info["excluded"].items():
                     st.write(f"・{rid}：{reason}")
         if info.get("errors"):
             with st.expander("取得時の補足"):
                 for x in info["errors"][-20:]:
                     st.write("・"+str(x))
 
-features = st.session_state.get("cloud_features")
-if features is not None and len(features):
-    features = features.copy()
-    features["date"] = features["date"].astype(str)
-    features["course"] = features["course"].astype(str)
-    features["race_no"] = features["race_no"].astype(str)
+    show_day_context(st.session_state.get("cloud_contexts") or {})
 
-    date_iso = str(st.session_state.get("cloud_info",{}).get("date",""))
-    day = features[features["date"]==date_iso].copy()
+features=st.session_state.get("cloud_features")
+if features is not None and len(features):
+    features=features.copy()
+    features["date"]=features["date"].astype(str)
+    features["course"]=features["course"].astype(str)
+    features["race_no"]=features["race_no"].astype(str)
+    date_iso=str(st.session_state.get("cloud_info",{}).get("date",""))
+    day=features[features["date"]==date_iso].copy()
 
     with st.container(border=True):
         st.markdown('<div class="step">② 開催地 → レースを選んで予想</div>',unsafe_allow_html=True)
-        courses = sorted(day["course"].dropna().unique())
-        course = st.selectbox("① 開催地を選択", courses, key="cloud_course")
-        cdf = day[day["course"]==course].copy()
-        races = sorted(cdf["race_no"].dropna().unique(), key=race_num)
-        race = st.selectbox(
-            "② レースを選択", races,
+        courses=sorted(day["course"].dropna().unique())
+        course=st.selectbox("① 開催地を選択",courses,key="cloud_course")
+        cdf=day[day["course"]==course].copy()
+        races=sorted(cdf["race_no"].dropna().unique(),key=race_num)
+        race=st.selectbox(
+            "② レースを選択",races,
             format_func=lambda x: race_label(x,cdf),
             key="cloud_race"
         )
-        rdf = cdf[cdf["race_no"]==race].copy()
-        select_key = f"{date_iso}|{course}|{race}"
+        rdf=cdf[cdf["race_no"]==race].copy()
+        surface=str(rdf.iloc[0].get("surface","")) if len(rdf) else ""
+        context=(st.session_state.get("cloud_contexts") or {}).get(course,{})
+        info=st.session_state.get("cloud_info") or {}
+        official=info.get("official_entry_urls") or {}
 
-        if st.session_state.get("cloud_select_key") != select_key:
-            try:
-                detail, summary = predict_race(
-                    rdf, date_iso,
-                    model_pkg["trained_models"], model_pkg["weights"]
+        use_day_adjustment=st.toggle(
+            "当日馬場・バイアス補正を反映",
+            value=True,
+            help="JRA公式馬場状態はAI本体へ反映し、含水率・馬場適性・当日内外/脚質傾向を小幅補正します。"
+        )
+
+        try:
+            with st.spinner("選択レースを予想しています…"):
+                detail,_=batch_predict_day(
+                    rdf,date_iso,
+                    model_pkg["trained_models"],model_pkg["weights"]
                 )
-                st.session_state["cloud_prediction"] = detail
-                st.session_state["cloud_select_key"] = select_key
-            except Exception as e:
-                st.error(f"予想できませんでした：{e}")
+                bias=fetch_bias_cached(
+                    date_iso,course,race_num(race),surface,
+                    tuple(sorted(official.items()))
+                )
+                detail=apply_day_adjustments(
+                    detail,context,bias,enabled=use_day_adjustment
+                )
+            show_prediction(detail,context,bias)
+        except Exception as e:
+            st.error(f"予想できませんでした：{e}")
 
-        detail = st.session_state.get("cloud_prediction")
-        if detail is not None and len(detail):
-            show_prediction(detail)
-
-with st.expander("クラウド版について"):
+with st.expander("Ver.1.5の当日補正について"):
     st.write(
-        "URLをスマホのホーム画面に追加すれば、次回からアイコンをタップして開けます。"
-        "クラウド側でAIを実行するため、PCを起動しておく必要はありません。"
+        "JRA公式の「良・稍重・重・不良」は、学習済みモデルがもともと持つ "
+        "`going` 特徴量へ直接入ります。馬体重・増減・単勝オッズ・人気も、"
+        "取得できた最新値をモデルへ渡します。"
+    )
+    st.write(
+        "クッション値・含水率・同日の内外/脚質傾向は、2016-2025学習データに"
+        "同一形式の履歴が揃っていないため、学習済みAIとは分けて最大±5ポイントの"
+        "「当日補正」として表示します。補正理由も馬ごとに表示します。"
     )
     st.caption(
-        "大規模学習データはクラウド向けに集約済みです。"
-        "元学習データの日付はsequence-proxyのため、休養日数系の特徴は近似値です。"
+        "天気予報はOpen-Meteoを使用。JRA馬場情報が予想日と一致しない場合は、"
+        "古い馬場状態をAIへ上書きしません。"
     )
 
-st.caption("AI予想・買い目は参考情報であり、的中や利益を保証するものではありません。")
+st.caption("AI予想・当日補正・買い目は参考情報であり、的中や利益を保証するものではありません。")

@@ -26,7 +26,7 @@ def enrich_entries_cloud(entries, store=None):
         ent[c] = pd.to_numeric(ent[c], errors="coerce")
     for c in ["race_class","running_style"]:
         if c not in ent.columns:
-            ent[c] = np.nan
+            ent[c] = ""
 
     ent["race_class_score"] = ent["race_class"].map(_class_score)
     ent["distance_bucket"] = (ent["distance"] // 400 * 400).astype("Int64")
@@ -41,7 +41,6 @@ def enrich_entries_cloud(entries, store=None):
     gr = store["gate"].copy()
     glob = store["global"]
 
-    # Merge compact lookups instead of loading 464k historical rows.
     out = ent.merge(latest, on="horse_name", how="left", suffixes=("","_prev"))
     out = out.merge(recent, on="horse_name", how="left")
 
@@ -58,6 +57,32 @@ def enrich_entries_cloud(entries, store=None):
     out = out.merge(jr, on="jockey", how="left")
     out = out.merge(tr, on="trainer", how="left")
     out = out.merge(gr, on=["course","surface","distance_bucket","gate"], how="left")
+
+    # Ver.1.5: today's going aptitude and typical running style.
+    hg=store.get("horse_going")
+    gg=store.get("global_going")
+    hstyle=store.get("horse_style")
+    if hg is not None and len(hg):
+        q=hg.rename(columns={"rate":"going_top3_rate","starts":"going_starts"})
+        out=out.merge(q,on=["horse_name","surface","going"],how="left")
+    else:
+        out["going_top3_rate"]=np.nan
+        out["going_starts"]=0
+    if gg is not None and len(gg):
+        q=gg.rename(columns={"rate":"going_global_top3_rate","starts":"going_global_starts"})
+        out=out.merge(q,on=["surface","going"],how="left")
+    else:
+        out["going_global_top3_rate"]=glob["top3"]
+        out["going_global_starts"]=0
+    if hstyle is not None and len(hstyle):
+        out=out.merge(hstyle,on="horse_name",how="left")
+    else:
+        out["usual_running_style"]=""
+
+    # Fill live running_style when absent with historical typical style.
+    live_style=out["running_style"].fillna("").astype(str).str.strip()
+    usual=out["usual_running_style"].fillna("").astype(str).str.strip()
+    out["running_style"]=live_style.where(live_style!="",usual)
 
     prev_dt = pd.to_datetime(out["_dt_prev"], errors="coerce")
     cur_dt = pd.to_datetime(out["_dt"], errors="coerce")
@@ -86,6 +111,14 @@ def enrich_entries_cloud(entries, store=None):
     out["implied_prob"] = 1 / odds.replace(0, np.nan)
     out["log_odds"] = np.log(odds.clip(lower=1.01))
 
+    out["going_global_top3_rate"]=pd.to_numeric(
+        out["going_global_top3_rate"],errors="coerce"
+    ).fillna(glob["top3"])
+    out["going_top3_rate"]=pd.to_numeric(
+        out["going_top3_rate"],errors="coerce"
+    ).fillna(out["going_global_top3_rate"])
+    out["going_starts"]=pd.to_numeric(out["going_starts"],errors="coerce").fillna(0)
+
     fill = {
         "recent_avg_finish": glob["finish"],
         "recent_top3_rate": glob["top3"],
@@ -102,7 +135,6 @@ def enrich_entries_cloud(entries, store=None):
     for c, v in fill.items():
         out[c] = pd.to_numeric(out[c], errors="coerce").fillna(v)
 
-    # Drop lookup-only columns while keeping the entry's original columns/features.
     out = out.drop(
         columns=[
             "_dt","_dt_prev","finish","margin","last3f_rank",
