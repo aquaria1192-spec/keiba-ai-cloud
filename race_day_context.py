@@ -19,6 +19,14 @@ from batch_predict import mark_for_rank, mark_label
 # 2026-09-27 official entry seeds. One official page per venue is enough:
 # links for the other races are collected from the page itself.
 OFFICIAL_ENTRY_SEEDS = {
+    # 2026-09-26: verified JRA official race-card pages.
+    # From one page per venue, links for the other races are collected.
+    ("2026-09-26","中山"):
+        "https://www.jra.go.jp/JRADB/accessD.html?CNAME=pw01dde0106202604080820260926%2FCB",
+    ("2026-09-26","阪神"):
+        "https://www.jra.go.jp/JRADB/accessD.html?CNAME=pw01dde0109202604080120260926%2FB6",
+
+    # 2026-09-27
     ("2026-09-27","中山"):
         "https://www.jra.go.jp/JRADB/accessD.html?CNAME=pw01dde0106202604091120260927%2F5A",
     ("2026-09-27","阪神"):
@@ -324,15 +332,31 @@ def collect_official_entry_urls(target_date: date, courses=None, session=None) -
     return result
 
 def _result_url_from_entry(entry_url: str, session):
+    """
+    Resolve the JRA official result page from an official entry page.
+    JRA may include accessibility text/whitespace around "レース結果",
+    so match by both href and text instead of exact-text equality only.
+    """
     try:
-        r=session.get(entry_url,timeout=15)
+        r=session.get(entry_url,timeout=20)
         r.raise_for_status()
         soup=BeautifulSoup(r.text,"lxml")
+
+        candidates=[]
         for a in soup.find_all("a",href=True):
             txt=_clean(a.get_text(" ",strip=True))
             href=urljoin(entry_url,a["href"])
-            if txt=="レース結果" and "accessS.html" in href:
+            if "accessS.html" not in href:
+                continue
+            if "レース結果" in txt:
                 return href
+            candidates.append(href)
+
+        # Fallback: if there is exactly one accessS result-style link on
+        # the race page, use it rather than failing because anchor text changed.
+        uniq=list(dict.fromkeys(candidates))
+        if len(uniq)==1:
+            return uniq[0]
     except Exception:
         pass
     return ""

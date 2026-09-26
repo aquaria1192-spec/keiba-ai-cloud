@@ -13,7 +13,10 @@ import pandas as pd
 import requests
 
 from auto_data_builder import _session, VENUE_CODE, _flatten_columns, _find_col
-from race_day_context import _result_url_from_entry, parse_jra_result_html
+from race_day_context import (
+    _result_url_from_entry, parse_jra_result_html,
+    collect_official_entry_urls
+)
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
@@ -137,7 +140,7 @@ def numtext(v):
     x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
     return "" if pd.isna(x) else f"{float(x):.8f}"
 
-def prediction_snapshot(detail,app_version="1.6"):
+def prediction_snapshot(detail,app_version="1.6.1"):
     if detail is None or len(detail)==0:
         return blank_history()
 
@@ -181,7 +184,7 @@ def prediction_snapshot(detail,app_version="1.6"):
         })
     return norm_history(pd.DataFrame(rows))
 
-def save_prediction_if_new(backend,detail,app_version="1.6"):
+def save_prediction_if_new(backend,detail,app_version="1.6.1"):
     snap=prediction_snapshot(detail,app_version)
     if snap.empty:
         return {"saved":False,"message":"予想データなし"}
@@ -221,36 +224,84 @@ def generic_result_parse(html):
 def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
     s=_session()
     rn=int(str(race_no).upper().replace("R","").strip())
+    errors=[]
 
-    # JRA official first.
-    for rid,entry in (official_entry_urls or {}).items():
-        if VENUE_CODE.get(rid[4:6],"")==str(course) and int(rid[-2:])==rn:
+    # JRA official first. Older session state may not have official URLs,
+    # so rebuild them at answer-check time.
+    official=dict(official_entry_urls or {})
+    if not official:
+        try:
+            official=collect_official_entry_urls(
+                pd.Timestamp(date_iso).date(), [str(course)], s
+            )
+        except Exception as e:
+            errors.append(f"JRA公式リンク再探索={e}")
+
+    # Even if some URLs were supplied, ensure the selected race is present.
+    has_selected=False
+    for rid in official:
+        try:
+            if VENUE_CODE.get(rid[4:6],"")==str(course) and int(rid[-2:])==rn:
+                has_selected=True
+                break
+        except Exception:
+            pass
+    if not has_selected:
+        try:
+            refreshed=collect_official_entry_urls(
+                pd.Timestamp(date_iso).date(), [str(course)], s
+            )
+            official.update(refreshed)
+        except Exception as e:
+            errors.append(f"JRA公式リンク補完={e}")
+
+    for rid,entry in official.items():
+        try:
+            if VENUE_CODE.get(rid[4:6],"")!=str(course) or int(rid[-2:])!=rn:
+                continue
             u=_result_url_from_entry(entry,s)
-            if u:
-                r=s.get(u,timeout=20); r.raise_for_status()
-                p=generic_result_parse(r.text)
-                if len(p.get("rows",pd.DataFrame())):
-                    p.update({"result_url":u,"source":"JRA公式"})
-                    return p
+            if not u:
+                errors.append(f"JRA公式 {rid}: 出馬表から結果リンクを発見できません")
+                continue
+            r=s.get(u,timeout=20)
+            r.raise_for_status()
+            p=generic_result_parse(r.text)
+            if len(p.get("rows",pd.DataFrame())):
+                p.update({"result_url":u,"source":"JRA公式"})
+                return p
+            errors.append(f"JRA公式 {rid}: 結果表を解析できません")
+        except Exception as e:
+            errors.append(f"JRA公式取得={e}")
 
-    # Generic fallback by race_id.
+    # Public fallback by race_id.
     rid=None
     for k,v in (race_id_map or {}).items():
         try:
             kc,kr=k.split("|",1)
             if kc==str(course) and int(str(kr).replace("R",""))==rn:
-                rid=v; break
+                rid=v
+                break
         except Exception:
             pass
     if rid:
-        u=f"https://race.netkeiba.com/race/result.html?race_id={rid}"
-        r=s.get(u,timeout=20); r.raise_for_status()
-        p=generic_result_parse(r.text)
-        if len(p.get("rows",pd.DataFrame())):
-            p.update({"result_url":u,"source":"公開レース結果"})
-            return p
+        try:
+            u=f"https://race.netkeiba.com/race/result.html?race_id={rid}"
+            r=s.get(u,timeout=20)
+            r.raise_for_status()
+            p=generic_result_parse(r.text)
+            if len(p.get("rows",pd.DataFrame())):
+                p.update({"result_url":u,"source":"公開レース結果"})
+                return p
+            errors.append(f"予備結果 {rid}: 結果表を解析できません")
+        except Exception as e:
+            errors.append(f"予備結果取得={e}")
 
-    raise RuntimeError("結果が未公開、または結果ページを取得できませんでした。")
+    detail=" / ".join(errors[-4:]) if errors else "結果リンクを作成できません"
+    raise RuntimeError(
+        "結果ページを取得できませんでした。"
+        " JRA公式結果が公開済みの場合は「最新データに更新」を1回押してから再試行してください。"
+        f" 詳細: {detail}"
+    )
 
 def settle_latest_snapshot(backend,date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
     hist=backend.load()

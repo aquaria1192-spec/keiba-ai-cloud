@@ -27,7 +27,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.6",
+    page_title="競馬予想AI Cloud Ver.1.6.1",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -203,7 +203,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.6")
+st.title("🏇 競馬予想AI Cloud Ver.1.6.1")
 st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
 
 st.markdown("""
@@ -344,7 +344,7 @@ if features is not None and len(features):
             )
             if st.session_state.get("_saved_fp_16") != fingerprint:
                 try:
-                    si=save_prediction_if_new(history_backend,detail,"1.6")
+                    si=save_prediction_if_new(history_backend,detail,"1.6.1")
                     st.session_state["_saved_fp_16"]=fingerprint
                     if si.get("saved"):
                         st.caption("📝 この予想を評価履歴へ記録しました。")
@@ -352,6 +352,7 @@ if features is not None and len(features):
                     st.warning(f"予想履歴を保存できませんでした：{ex}")
 
             st.markdown("#### レース終了後の答え合わせ")
+            st.caption("JRA公式の結果ページを再探索して照合します。結果公開後に使用してください。")
             if st.button(
                 "結果を取得して答え合わせ",
                 use_container_width=True,
@@ -452,7 +453,7 @@ with st.container(border=True):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.6の自己評価について"):
+with st.expander("Ver.1.6.1の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
