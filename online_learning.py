@@ -347,6 +347,8 @@ def _promotion_decision(champion_metrics, challenger_metrics):
     ok = (
         n["win_logloss"] <= c["win_logloss"] and
         n["win_brier"] <= c["win_brier"] and
+        n["top3_logloss"] <= c["top3_logloss"] and
+        n["top3_brier"] <= c["top3_brier"] and
         mean_ratio <= 0.995 and
         cal_new <= cal_old + 0.01 and
         n["top_pick_win_rate"] >= c["top_pick_win_rate"] - 0.02
@@ -512,6 +514,16 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
 
     if train["race_key"].nunique() < 40 or valid["race_key"].nunique() < 20:
         result["status"] = "insufficient_split"
+        status.update({
+            "last_seen_race_count": total_races,
+            "last_status": result["status"],
+            "last_checked_at": result["checked_at"],
+            "latest": result,
+        })
+        store.write_json(
+            LEARNING_STATUS_PATH,status,
+            "Update online learning insufficient split status"
+        )
         return result
 
     x_train = _adapter_frame(train)
