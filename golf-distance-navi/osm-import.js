@@ -272,7 +272,7 @@ function buildCourse(data,place){
       id:"osm-"+String(place.osm_type||"x")+"-"+String(place.osm_id||Date.now()),
       name:name,
       holes:out,
-      source:{provider:"OpenStreetMap",osmType:place.osm_type||"",osmId:place.osm_id||"",importedAt:new Date().toISOString()}
+      source:{provider:"OpenStreetMap",osmType:place.osm_type||"",osmId:place.osm_id||"",courseCenter:{lat:Number(place.lat),lng:Number(place.lon)},importedAt:new Date().toISOString()}
     },
     stats:{holes:Object.keys(out).length,front:frontN,center:centerN,back:backN,sources:sourceCounts,diagnostics:diagnostics}
   };
