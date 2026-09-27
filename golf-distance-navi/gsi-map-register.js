@@ -95,10 +95,41 @@ function saveCenter(lat,lng){
     setStatus(activeCourse.name+" / 18Hまで登録しました。必要なホールは再タップで上書きできます。");
   }
 }
-function getStartCenter(){
+async function findCourseCenterFromIndex(course){
+  if(!course||!course.name)return null;
+  try{
+    var r=await fetch("./golf-courses-index.json",{cache:"no-store"});
+    if(!r.ok)return null;
+    var data=await r.json(),arr=Array.isArray(data)?data:(Array.isArray(data.courses)?data.courses:[]);
+    var nq=String(course.name||"").normalize("NFKC").toLowerCase().replace(/[\\s　・･\\-_/()（）]/g,"");
+    function n(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\\s　・･\\-_/()（）]/g,"")}
+    var candidates=arr.filter(function(x){return Number.isFinite(Number(x.lat))&&Number.isFinite(Number(x.lon))});
+    var hit=candidates.find(function(x){return n(x.name)===nq});
+    if(!hit)hit=candidates.find(function(x){var xn=n(x.name);return xn.indexOf(nq)===0||nq.indexOf(xn)===0});
+    if(!hit)hit=candidates.find(function(x){var xn=n(x.name);return xn.indexOf(nq)>=0||nq.indexOf(xn)>=0});
+    if(!hit)return null;
+    var p={lat:Number(hit.lat),lng:Number(hit.lon)};
+    var courses=readCourses(),idx=courses.findIndex(function(c){return c.id===course.id});
+    if(idx>=0){
+      courses[idx].source=courses[idx].source||{};
+      courses[idx].source.courseCenter=p;
+      writeCourses(courses);
+      activeCourse=courses[idx];
+    }
+    return p;
+  }catch(e){
+    return null;
+  }
+}
+async function getStartCenter(){
   var c=initialCenter(activeCourse);
-  if(c)return Promise.resolve(c);
-  if(!navigator.geolocation)return Promise.resolve({lat:36.2048,lng:138.2529});
+  if(c)return c;
+  var indexed=await findCourseCenterFromIndex(activeCourse);
+  if(indexed){
+    setStatus(activeCourse.name+" の位置をゴルフ場一覧から取得しました。航空写真を表示します。");
+    return indexed;
+  }
+  if(!navigator.geolocation)return{lat:36.2048,lng:138.2529};
   return new Promise(function(resolve){
     navigator.geolocation.getCurrentPosition(
       function(p){resolve({lat:p.coords.latitude,lng:p.coords.longitude})},
