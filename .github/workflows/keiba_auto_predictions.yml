@@ -89,6 +89,30 @@ jobs:
           assert ((p1>=0)&(p1<=1)).all()
           assert ((p3>=p1)&(p3<=1)).all()
 
+          # A partial result parse must never become training labels.
+          rows=pd.DataFrame({
+              "snapshot_id":["s1"]*8,
+              "horse_no":list(range(1,9)),
+              "date":["2026-09-27"]*8,
+              "course":["中山"]*8,
+              "race_no":["1R"]*8,
+          })
+          rows=online_learning.normalize_learning_rows(rows)
+          bad,changed=online_learning.apply_learning_result(
+              rows,"s1",{1:1,2:2,3:3},"u","t"
+          )
+          assert changed
+          assert set(bad["result_quality"]) == {"incomplete_result"}
+          assert pd.to_numeric(bad["actual_finish"],errors="coerce").isna().all()
+
+          good_map={1:1,2:2,3:3,4:4,5:5,6:6,7:7,8:8}
+          good,changed=online_learning.apply_learning_result(
+              rows,"s1",good_map,"u","t"
+          )
+          assert changed
+          assert set(good["result_quality"]) == {"complete"}
+          assert pd.to_numeric(good["actual_finish"],errors="coerce").notna().sum()==8
+
           app=Path("streamlit_app.py").read_text(encoding="utf-8")
           assert app.index("online_adapter=load_online_adapter()") < app.index(
               "if online_adapter is not None:"
