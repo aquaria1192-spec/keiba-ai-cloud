@@ -12,7 +12,8 @@ var demo={
   source:{
     provider:"Demo",
     officialName:"那須小川ゴルフクラブ",
-    officialAddress:"栃木県那須郡那珂川町三輪1283"
+    officialAddress:"栃木県那須郡那珂川町三輪1283",
+    pars:[4,4,5,3,4,3,4,5,4,4,4,3,4,5,4,3,5,4]
   }
 };
 var i=courses.findIndex(function(c){return c.id===id});
