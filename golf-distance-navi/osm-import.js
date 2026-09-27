@@ -363,18 +363,28 @@ async function importSelected(){
     var resp=await fetch(OVERPASS+"?data="+encodeURIComponent(q),{headers:{"Accept":"application/json"}});
     if(!resp.ok)throw new Error("コース詳細サービス HTTP "+resp.status);
     var data=await resp.json(),built=buildCourse(data,selected);
+    var partialMessage="";
     if(!built.stats.holes){
       var d=built.stats.diagnostics||{};
-      throw new Error("ホール番号を判別できませんでした。OSM登録: hole "+(d.rawHoles||0)+"（番号付 "+(d.refHoles||0)+"）/ tee "+(d.rawTees||0)+"（番号付 "+(d.refTees||0)+"）/ green "+(d.rawGreens||0)+"（番号付 "+(d.refGreens||0)+"）/ pin "+(d.rawPins||0)+"（番号付 "+(d.refPins||0)+"）。");
+      partialMessage="ゴルフ場は登録しました。ただしOpenStreetMapにホール番号付き詳細がないため、18ホール位置は自動取得できませんでした。"+
+        " 検出: hole "+(d.rawHoles||0)+" / tee "+(d.rawTees||0)+" / green "+(d.rawGreens||0)+" / pin "+(d.rawPins||0)+"。"+
+        " コース画面の「地図で設定」で各ホールを補完できます。";
     }
+    built.course.source.diagnostics=built.stats.diagnostics||{};
     var courses=read("gdn_courses",[]),idx=courses.findIndex(function(c){return c.id===built.course.id});
     if(idx>=0)courses[idx]=built.course;else courses.push(built.course);
     write("gdn_courses",courses);
     localStorage.setItem("gdn_course_id",built.course.id);
     localStorage.setItem("gdn_hole","1");
-    var st=built.stats,text="取得完了："+st.holes+"ホール / 中央 "+st.center+" / 手前 "+st.front+" / 奥 "+st.back;
-    if(st.holes<18||st.front<st.holes||st.back<st.holes)text+="。未取得地点は「地図で設定」で補正できます。";
-    alert(text);location.reload();
+    var st=built.stats;
+    if(partialMessage){
+      alert(partialMessage);
+    }else{
+      var text="取得完了："+st.holes+"ホール / 中央 "+st.center+" / 手前 "+st.front+" / 奥 "+st.back;
+      if(st.holes<18||st.front<st.holes||st.back<st.holes)text+="。未取得地点は「地図で設定」で補正できます。";
+      alert(text);
+    }
+    location.reload();
   }catch(e){
     msg("自動取得できませんでした："+e.message,"errmsg");
     $("osmImport").disabled=false;
