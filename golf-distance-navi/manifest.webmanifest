@@ -1,0 +1,12 @@
+{
+  "name": "Golf Distance Navi",
+  "short_name": "Golf Navi",
+  "description": "GPSでゴルフの距離とショット飛距離を計測",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5f3",
+  "theme_color": "#0f5132",
+  "orientation": "portrait-primary",
+  "icons": [{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
