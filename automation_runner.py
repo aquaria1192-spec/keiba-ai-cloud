@@ -31,6 +31,12 @@ from evaluation_store import (
 from betting_tools import race_bet_plan
 from payout_tools import plan_to_json
 from github_branch_store import GitHubBranchStore
+from online_learning import (
+    champion_version, load_adapter_from_store, apply_online_adapter,
+    learning_rows_from_detail, load_learning_rows, save_learning_rows,
+    merge_learning_rows, learning_snapshot_needs_result,
+    apply_learning_result, run_online_learning,
+)
 
 BASE=Path(__file__).resolve().parent
 MODEL_FILE=BASE/"data"/"cloud_model.joblib"
@@ -126,10 +132,11 @@ def dt_for_post(target_date,hhmm):
     except Exception:
         return None
 
-def load_assets():
+def load_assets(history_store=None):
     pkg=joblib.load(MODEL_FILE)
-    store=load_feature_store()
-    return pkg,store
+    feature_store=load_feature_store()
+    adapter=load_adapter_from_store(history_store) if history_store is not None else None
+    return pkg,feature_store,adapter
 
 def load_existing(store):
     df=store.read_csv(HISTORY_PATH)
@@ -142,7 +149,7 @@ def save_history(store,df,message):
 def snapshot_race(
     race_id,target_date,model_pkg,feature_store,
     contexts,snapshot_type,post_time="",minutes_before=np.nan,
-    official_entry_urls=None,
+    official_entry_urls=None,online_adapter=None,
 ):
     s=_session()
     entries=fetch_race_entries(race_id,target_date,s,timeout=20)
@@ -168,6 +175,7 @@ def snapshot_race(
         "summary":"終了済みレースなし","jockey_stats":{}
     }
     detail=apply_day_adjustments(detail,context,bias,enabled=True)
+    detail=apply_online_adapter(detail,online_adapter)
     detail["snapshot_type"]=snapshot_type
     detail["post_time"]=post_time
     detail["minutes_before_post"]=minutes_before
@@ -180,7 +188,7 @@ def snapshot_race(
     detail["bet_budget"]=int(meta.get("予算",AUTO_BET_BUDGET))
     detail["bet_plan_json"]=plan_to_json(plan)
 
-    snap=prediction_snapshot(detail,app_version="1.8.2")
+    snap=prediction_snapshot(detail,app_version="1.12")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):
@@ -190,7 +198,11 @@ def snapshot_race(
         snap["post_time"]=post_time
         snap["minutes_before_post"]=minutes_before
         snap["auto_generated"]=True
-    return snap
+
+    learning=learning_rows_from_detail(
+        detail,snap,champion_version(online_adapter)
+    )
+    return snap,learning
 
 def backfill_missing_bet_plans(existing):
     """
@@ -315,23 +327,28 @@ def run_predictions(mode,target_date,store):
     courses=sorted(set(x["course"] for x in due if x.get("course")))
     official_urls=collect_official_entry_urls(target_date,courses)
     contexts=fetch_day_contexts(target_date,courses,official_urls)
-    model_pkg,feature_store=load_assets()
+    model_pkg,feature_store,online_adapter=load_assets(store)
 
+    learning_existing=load_learning_rows(store)
     new=[]
+    learning_new=[]
     for i,x in enumerate(due,1):
         rid=x["race_id"]
         print(f"[{i}/{len(due)}] {x['course']} {x['race_no']} {mode}")
         try:
             mins=x.get("minutes_before_post",np.nan)
-            snap=snapshot_race(
+            snap,learn=snapshot_race(
                 rid,target_date,model_pkg,feature_store,contexts,
                 snapshot_type=mode,
                 post_time=x.get("post_time",""),
                 minutes_before=mins,
                 official_entry_urls=official_urls,
+                online_adapter=online_adapter,
             )
             if len(snap):
                 new.append(snap)
+            if len(learn):
+                learning_new.append(learn)
         except Exception as e:
             print(f"SKIP {rid}: {e}")
 
@@ -344,12 +361,20 @@ def run_predictions(mode,target_date,store):
         store,merged,
         f"Auto-save {mode} predictions {target_date.isoformat()}"
     )
+    if learning_new:
+        learning_merged=merge_learning_rows(learning_existing,*learning_new)
+        save_learning_rows(
+            store,learning_merged,
+            f"Save pre-race learning features {target_date.isoformat()}"
+        )
     print(f"Saved {sum(len(x) for x in new)} horse rows / {len(new)} races.")
 
 def settle_all(target_date,store):
     from evaluation_store import fetch_race_result
 
     hist=load_existing(store)
+    learning=load_learning_rows(store)
+    learning_changed=False
     hist,backfilled=backfill_missing_bet_plans(hist)
     if backfilled:
         save_history(
@@ -386,7 +411,8 @@ def settle_all(target_date,store):
             .notna().sum() >= 3
         )
         bet_done=(hist.loc[mask,"bet_status"].astype(str)=="確定").any()
-        if finish_done and bet_done:
+        needs_learning=learning_snapshot_needs_result(learning,sid)
+        if finish_done and bet_done and not needs_learning:
             continue
         course=str(m["course"]); race_no=str(m["race_no"])
         try:
@@ -413,6 +439,10 @@ def settle_all(target_date,store):
                 hist.at[idx,"settled_at"]=settled_at
                 hist.at[idx,"result_url"]=result.get("result_url","")
                 matched+=1
+            learning,learn_changed=apply_learning_result(
+                learning,sid,fmap,result.get("result_url",""),settled_at
+            )
+            learning_changed = learning_changed or learn_changed
             if matched>=3 or finish_done:
                 bet=apply_bet_settlement(
                     hist,mask,result,settled_at
@@ -435,6 +465,11 @@ def settle_all(target_date,store):
             store,hist,
             f"Auto-settle race results {target_date.isoformat()}"
         )
+    if learning_changed:
+        save_learning_rows(
+            store,learning,
+            f"Settle learning labels {target_date.isoformat()}"
+        )
 
 def determine_mode(requested,now):
     if requested!="auto":
@@ -448,7 +483,7 @@ def determine_mode(requested,now):
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument("--mode",choices=["auto","morning","pre_race","settle"],default="auto")
+    ap.add_argument("--mode",choices=["auto","morning","pre_race","settle","learn"],default="auto")
     ap.add_argument("--date",default="")
     args=ap.parse_args()
 
@@ -463,8 +498,11 @@ def main():
 
     if mode in ("morning","pre_race"):
         run_predictions(mode,target_date,store)
-    else:
+    elif mode=="settle":
         settle_all(target_date,store)
+    else:
+        result=run_online_learning(store)
+        print("Online learning:",result)
 
 if __name__=="__main__":
     main()
