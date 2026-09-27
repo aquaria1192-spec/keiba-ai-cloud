@@ -11,8 +11,7 @@ import streamlit as st
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day
-from betting_tools import race_bet_plan, mark_legend
-from payout_tools import plan_to_json
+from betting_tools import mark_legend
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
@@ -22,7 +21,6 @@ from evaluation_store import (
     settle_day_snapshots,
     evaluation_metrics, mark_summary, condition_summary,
     calibration_summary, training_candidate_csv,
-    race_roi_summary, daily_roi_summary, bet_type_roi_summary,
     load_public_auto_history, merge_histories
 )
 from online_learning import (
@@ -193,7 +191,7 @@ def show_day_context(contexts):
             if not valid:
                 st.warning("JRA馬場情報が予想日と一致していないため、この値はAIの馬場状態には上書きしていません。")
 
-def show_prediction(detail, context, bias, fixed_style=None, fixed_budget=None):
+def show_prediction(detail, context, bias):
     rg=detail.sort_values("順位").copy()
     label=str(rg.iloc[0].get("レース表示",""))
     st.subheader(label)
@@ -230,40 +228,7 @@ def show_prediction(detail, context, bias, fixed_style=None, fixed_budget=None):
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
 
-    st.markdown("#### 馬券の買い方")
-    if fixed_style is not None:
-        style=str(fixed_style)
-        budget=int(fixed_budget or 2000)
-        st.caption(
-            f"答え合わせ用に固定した一括予想の買い目："
-            f"**{style} / 1レース {budget:,}円**"
-        )
-    else:
-        c1,c2=st.columns(2)
-        with c1:
-            style=st.selectbox(
-                "買い方",["堅実","標準","攻め"],index=1,
-                key="cloud_bet_style"
-            )
-        with c2:
-            budget=st.number_input(
-                "このレースの予算（円）",min_value=500,max_value=50000,
-                value=2000,step=100,key="cloud_bet_budget"
-            )
-    plan,meta=race_bet_plan(rg,style=style,budget_yen=int(budget))
-    st.write(f"**AI上位評価の差：{meta['信頼度']}**　{meta['コメント']}")
-    if len(plan):
-        st.dataframe(
-            plan[["券種","買い目","金額","狙い","予算内比率"]],
-            use_container_width=True,hide_index=True
-        )
-        st.caption(f"合計 {int(plan['金額'].sum()):,}円")
-        st.download_button(
-            "このレースの買い目CSV",
-            plan.to_csv(index=False).encode("utf-8-sig"),
-            "買い目.csv","text/csv",use_container_width=True
-        )
-    return plan,meta
+    return rg
 
 def default_race_date():
     now=datetime.now(JST)
@@ -275,7 +240,7 @@ def default_race_date():
 
 st.title("🏇 競馬予想AI Cloud Ver.1.12")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
-st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
+st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・単勝/3着内的中率集計")
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -445,15 +410,6 @@ with st.container(border=True):
             key="cloud_use_day_adjustment"
         )
 
-        # All races in a venue use the same fixed ticket policy so ROI and
-        # answer checking exactly match the venue-wide batch prediction.
-        batch_bet_style="標準"
-        batch_bet_budget=2000
-        st.caption(
-            f"答え合わせ用の一括買い目：**{batch_bet_style} / "
-            f"1レース {batch_bet_budget:,}円**"
-        )
-
         cache=st.session_state.setdefault(
             "cloud_course_prediction_cache",{}
         )
@@ -461,8 +417,6 @@ with st.container(border=True):
             str(date_iso),
             str(course),
             bool(use_day_adjustment),
-            batch_bet_style,
-            int(batch_bet_budget),
             champion_version(online_adapter),
         )
 
@@ -509,19 +463,10 @@ with st.container(border=True):
                         )
                         rd=apply_online_adapter(rd,online_adapter)
 
-                        # Freeze the prediction AND the ticket plan at venue-batch time.
-                        plan,plan_meta=race_bet_plan(
-                            rd,
-                            style=batch_bet_style,
-                            budget_yen=batch_bet_budget,
-                        )
+                        # Freeze only the prediction at venue-batch time.
+                        # Answer checking evaluates prediction accuracy, not betting ROI.
                         rd["snapshot_type"]="course_batch"
                         rd["auto_generated"]=False
-                        rd["bet_style"]=batch_bet_style
-                        rd["bet_budget"]=int(
-                            plan_meta.get("予算",batch_bet_budget)
-                        )
-                        rd["bet_plan_json"]=plan_to_json(plan)
 
                         adjusted_parts.append(rd)
                         bias_map[race_key]=bias
@@ -670,13 +615,7 @@ with st.container(border=True):
             )
 
             try:
-                shown_plan,shown_meta=show_prediction(
-                    detail,
-                    context,
-                    bias,
-                    fixed_style=batch_bet_style,
-                    fixed_budget=batch_bet_budget,
-                )
+                show_prediction(detail,context,bias)
 
                 # The selected race is display-only. Answer checking uses the
                 # already-fixed venue-wide course_batch snapshot.
@@ -690,9 +629,6 @@ with st.container(border=True):
                             round(float(r.get("win_prob",0)),8),
                             str(r.get("印","")),
                             str(r.get("odds","")),
-                            str(r.get("bet_style","")),
-                            str(r.get("bet_budget","")),
-                            str(r.get("bet_plan_json","")),
                         )
                         for _,r in detail.sort_values(
                             "horse_no"
@@ -833,26 +769,13 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
             q[pd.to_numeric(q["actual_finish"],errors="coerce").notna()]
             [["course","race_no"]].drop_duplicates().shape[0]
         )
-        day_one=q.sort_values("recorded_dt").drop_duplicates("snapshot_id",keep="last")
-        exact=day_one[day_one["bet_status"].astype(str)=="確定"].copy()
-        exact_stake=int(pd.to_numeric(exact["bet_stake"],errors="coerce").fillna(0).sum()) if len(exact) else 0
-        exact_payout=int(pd.to_numeric(exact["bet_payout"],errors="coerce").fillna(0).sum()) if len(exact) else 0
-        exact_roi=(exact_payout/exact_stake*100) if exact_stake else np.nan
         st.write(
             f"最新日：**{latest_date}**　／　対象 {races}R　／　"
             f"朝保存 {morning}R　／　発走前保存 {near}R　／　答え合わせ済み {settled}R"
         )
-        if exact_stake:
-            st.write(
-                f"**確定馬券成績**　購入 {exact_stake:,}円　／　"
-                f"払戻 {exact_payout:,}円　／　"
-                f"収支 {exact_payout-exact_stake:+,}円　／　"
-                f"回収率 {exact_roi:.1f}%"
-            )
         show_cols=[
             "course","race_no","snapshot_type","post_time",
-            "minutes_before_post","recorded_at",
-            "bet_stake","bet_payout","bet_profit","bet_roi","bet_status"
+            "minutes_before_post","recorded_at"
         ]
         last=(
             q.sort_values("recorded_dt")
@@ -877,58 +800,25 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                 "結果公開後に「この日の全レースをまとめて答え合わせ」を押してください。"
             )
         else:
-            a,b,c,d=st.columns(4)
+            a,b,c=st.columns(3)
             a.metric("評価済み",f"{metrics['races']}R")
-            b.metric("◎勝率","-" if pd.isna(metrics["main_win_rate"]) else f"{metrics['main_win_rate']*100:.1f}%")
+            b.metric("◎単勝的中率","-" if pd.isna(metrics["main_win_rate"]) else f"{metrics['main_win_rate']*100:.1f}%")
             c.metric("◎3着内率","-" if pd.isna(metrics["main_top3_rate"]) else f"{metrics['main_top3_rate']*100:.1f}%")
-            d.metric("勝率Brier","-" if pd.isna(metrics["brier_win"]) else f"{metrics['brier_win']:.4f}")
 
             a,b,c=st.columns(3)
-            a.metric("勝者Log Loss","-" if pd.isna(metrics["log_loss"]) else f"{metrics['log_loss']:.3f}")
+            a.metric("勝率Brier","-" if pd.isna(metrics["brier_win"]) else f"{metrics['brier_win']:.4f}")
             b.metric("3着内Brier","-" if pd.isna(metrics["brier_top3"]) else f"{metrics['brier_top3']:.4f}")
-            c.metric("確定回収率","-" if pd.isna(metrics["bet_roi"]) else f"{metrics['bet_roi']:.1f}%")
+            c.metric("勝者Log Loss","-" if pd.isna(metrics["log_loss"]) else f"{metrics['log_loss']:.3f}")
 
-            if metrics["bet_races"]>0:
-                a,b,c=st.columns(3)
-                a.metric("購入総額",f"{metrics['bet_stake']:,}円")
-                b.metric("払戻総額",f"{metrics['bet_payout']:,}円")
-                c.metric("収支",f"{metrics['bet_profit']:+,}円")
             st.caption(
-                "確定回収率はレース前に固定保存した買い目とJRA公式の確定払戻金で計算します。 旧履歴で買い目が未保存の場合も、保存済み予想だけから自動補完して再精算します。"
-                "返還馬を含む買い目は購入額を返還として計上します。"
+                "答え合わせは、開催地ごとに固定保存した予想と実際の着順を比較し、"
+                "◎本命の単勝的中率・3着内率、印別成績、確率精度を集計します。"
             )
 
-            t1,t2,t3,t4,t5=st.tabs(
-                ["回収率","印別成績","競馬場・距離別","確率校正","再学習候補"]
+            t1,t2,t3,t4=st.tabs(
+                ["印別成績","競馬場・距離別","確率校正","再学習候補"]
             )
             with t1:
-                rr=race_roi_summary(history)
-                if len(rr):
-                    show=rr.copy()
-                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
-                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
-                    )
-                    st.markdown("##### レース別")
-                    st.dataframe(show,use_container_width=True,hide_index=True)
-
-                dd=daily_roi_summary(history)
-                if len(dd):
-                    show=dd.copy()
-                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
-                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
-                    )
-                    st.markdown("##### 日別")
-                    st.dataframe(show,use_container_width=True,hide_index=True)
-
-                bt=bet_type_roi_summary(history)
-                if len(bt):
-                    show=bt.copy()
-                    show["回収率"]=pd.to_numeric(show["回収率"],errors="coerce").map(
-                        lambda x:"-" if pd.isna(x) else f"{x:.1f}%"
-                    )
-                    st.markdown("##### 券種別")
-                    st.dataframe(show,use_container_width=True,hide_index=True)
-            with t2:
                 q=mark_summary(history)
                 if len(q):
                     for col in ["勝率","3着内率","平均予測勝率"]:
@@ -936,7 +826,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                             lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
-            with t3:
+            with t2:
                 q=condition_summary(history)
                 if len(q):
                     for col in ["◎勝率","◎3着内率","◎平均予測勝率"]:
@@ -944,7 +834,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                             lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
-            with t4:
+            with t3:
                 q=calibration_summary(history)
                 if len(q):
                     for col in ["平均予測勝率","実勝率","差"]:
@@ -953,7 +843,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                         )
                     st.dataframe(q,use_container_width=True,hide_index=True)
                     st.caption("予測勝率と実勝率が近いほど、確率予測が適切に校正されています。")
-            with t5:
+            with t4:
                 cand=training_candidate_csv(history)
                 st.write(f"再学習候補：**{metrics['races']}レース / {len(cand)}頭**")
                 if len(cand):
@@ -1001,6 +891,6 @@ with st.expander("Ver.1.12の自動学習について"):
     )
 
 st.caption(
-    "AI予想・当日補正・自己評価・買い目は参考情報です。"
-    "過去成績は将来の的中や利益を保証するものではありません。"
+    "AI予想・当日補正・自己評価は参考情報です。"
+    "過去成績は将来の的中を保証するものではありません。"
 )
