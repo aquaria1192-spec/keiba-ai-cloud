@@ -8,6 +8,10 @@ var markers=[];
 var hole=1;
 var activeCourse=null;
 var dirty=false;
+var currentMarker=null;
+var accuracyCircle=null;
+var geoWatchId=null;
+var lastPosition=null;
 
 function $(id){return document.getElementById(id)}
 function readCourses(){
@@ -37,6 +41,83 @@ function initialCenter(course){
 }
 function setStatus(text){
   if($("gsiStatus"))$("gsiStatus").textContent=text;
+}
+function currentLocationIcon(){
+  return L.divIcon({
+    className:"",
+    html:'<div style="width:20px;height:20px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 0 0 3px rgba(25,118,210,.28),0 2px 6px rgba(0,0,0,.35)"></div>',
+    iconSize:[20,20],
+    iconAnchor:[10,10]
+  });
+}
+function updateCurrentLocation(pos){
+  if(!map||!pos||!pos.coords)return;
+  var lat=Number(pos.coords.latitude),lng=Number(pos.coords.longitude),acc=Number(pos.coords.accuracy)||0;
+  if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+  lastPosition={lat:lat,lng:lng,accuracy:acc};
+  if(!currentMarker){
+    currentMarker=L.marker([lat,lng],{
+      icon:currentLocationIcon(),
+      zIndexOffset:2000,
+      title:"現在地"
+    }).addTo(map);
+    accuracyCircle=L.circle([lat,lng],{
+      radius:acc||10,
+      weight:1,
+      opacity:.55,
+      fillOpacity:.10
+    }).addTo(map);
+  }else{
+    currentMarker.setLatLng([lat,lng]);
+    if(accuracyCircle)accuracyCircle.setLatLng([lat,lng]).setRadius(acc||10);
+  }
+}
+function stopCurrentLocation(){
+  if(geoWatchId!==null&&navigator.geolocation){
+    navigator.geolocation.clearWatch(geoWatchId);
+    geoWatchId=null;
+  }
+  if(map&&currentMarker){map.removeLayer(currentMarker)}
+  if(map&&accuracyCircle){map.removeLayer(accuracyCircle)}
+  currentMarker=null;
+  accuracyCircle=null;
+}
+function startCurrentLocation(){
+  stopCurrentLocation();
+  if(!navigator.geolocation){
+    setStatus("位置情報に対応していない端末です。");
+    return;
+  }
+  geoWatchId=navigator.geolocation.watchPosition(
+    updateCurrentLocation,
+    function(e){
+      if(e&&e.code===1){
+        setStatus(activeCourse.name+" / 位置情報を許可すると現在地を航空写真上に表示できます。");
+      }
+    },
+    {enableHighAccuracy:true,maximumAge:1000,timeout:15000}
+  );
+}
+function addLocateControl(){
+  if(!map)return;
+  var ctl=L.control({position:"topright"});
+  ctl.onAdd=function(){
+    var b=L.DomUtil.create("button","");
+    b.type="button";
+    b.textContent="現在地";
+    b.title="現在地へ移動";
+    b.style.cssText="background:#fff;border:2px solid rgba(0,0,0,.2);border-radius:5px;padding:8px 10px;font-weight:800;cursor:pointer;";
+    L.DomEvent.disableClickPropagation(b);
+    L.DomEvent.on(b,"click",function(){
+      if(lastPosition){
+        map.setView([lastPosition.lat,lastPosition.lng],18);
+      }else{
+        setStatus("現在地を取得しています…");
+      }
+    });
+    return b;
+  };
+  ctl.addTo(map);
 }
 function markerIcon(n){
   return L.divIcon({
@@ -172,6 +253,8 @@ async function openRegister(){
     if(!e.latlng)return;
     saveCenter(e.latlng.lat,e.latlng.lng);
   });
+  addLocateControl();
+  startCurrentLocation();
   renderMarkers();
   updateHoleUi();
   setTimeout(function(){map.invalidateSize()},100);
@@ -179,6 +262,7 @@ async function openRegister(){
 function closeRegister(){
   $("gsiModal").classList.add("hidden");
   clearMarkers();
+  stopCurrentLocation();
   if(map){map.remove();map=null}
   activeCourse=null;
   if(dirty){
