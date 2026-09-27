@@ -25,13 +25,16 @@ from evaluation_store import (
     race_roi_summary, daily_roi_summary, bet_type_roi_summary,
     load_public_auto_history, merge_histories
 )
+from online_learning import (
+    load_adapter_public, apply_online_adapter, champion_version
+)
 
 BASE = Path(__file__).resolve().parent
 MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.11",
+    page_title="競馬予想AI Cloud Ver.1.12",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -69,6 +72,12 @@ def load_cloud_assets():
     model = joblib.load(MODEL_FILE)
     store = load_feature_store()
     return model, store
+
+@st.cache_resource(ttl=300)
+def load_online_adapter():
+    # The promoted adapter lives on prediction-history, so it can improve
+    # without changing/redeploying the main application branch.
+    return load_adapter_public()
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_entries_cached(date_iso: str):
@@ -264,10 +273,9 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.11")
-st.caption("精度強化モデル：騎手・調教師の条件別成績と馬場適性をAI本体で学習。本命順位は勝率モデルを主軸に判定。")
+st.title("🏇 競馬予想AI Cloud Ver.1.12")
+st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
-
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -281,9 +289,16 @@ st.markdown("""
 
 try:
     model_pkg,feature_store=load_cloud_assets()
+    online_adapter=load_online_adapter()
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
+
+st.caption("確率校正：2024 proxy-yearで固定・2025 proxy-yearホールドアウトで再検証済み")
+if online_adapter is not None:
+    st.caption(f"自動学習補正：**{champion_version(online_adapter)}**")
+else:
+    st.caption("自動学習補正：base-1.12-calibrated（新規200レース以上のtrue-dateデータを蓄積中）")
 
 history_backend=HistoryBackend(st.secrets)
 with st.expander("📊 予想履歴の保存先",expanded=False):
@@ -348,7 +363,7 @@ with st.container(border=True):
 
             # 当日データを取り直したら、開催地一括予想も必ず作り直す。
             st.session_state["cloud_course_prediction_cache"]={}
-            st.session_state.pop("_saved_fp_111",None)
+            st.session_state.pop("_saved_fp_112",None)
 
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
@@ -448,6 +463,7 @@ with st.container(border=True):
             bool(use_day_adjustment),
             batch_bet_style,
             int(batch_bet_budget),
+            champion_version(online_adapter),
         )
 
         if cache_key not in cache:
@@ -491,6 +507,7 @@ with st.container(border=True):
                             bias,
                             enabled=use_day_adjustment
                         )
+                        rd=apply_online_adapter(rd,online_adapter)
 
                         # Freeze the prediction AND the ticket plan at venue-batch time.
                         plan,plan_meta=race_bet_plan(
@@ -554,7 +571,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.11",
+                                "1.12",
                                 snapshot_type="course_batch",
                             )
                         except Exception as save_ex:
@@ -683,7 +700,7 @@ with st.container(border=True):
                     )
                 )
 
-                st.session_state["_saved_fp_111"]=fingerprint
+                st.session_state["_saved_fp_112"]=fingerprint
                 st.caption(
                     "答え合わせは、レース選択時の表示ではなく、"
                     "開催地を選んだ時点で固定保存した一括予想を使用します。"
@@ -968,19 +985,19 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.11の自己評価について"):
+with st.expander("Ver.1.12の自動学習について"):
     st.write(
-        "レース1つごとにAIモデルを自動更新することはしません。"
-        "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
+        "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
+        "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
     )
     st.write(
-        "十分なレース数が集まったら、再学習候補CSVを使って次版のモデルを"
-        "時系列検証付きで再学習します。"
+        "新しい確定レースが200レース以上たまった時だけchallengerを作成し、"
+        "過去→未来の時系列検証でLog Loss・Brier・Calibrationをchampionと比較します。"
+        "採用条件を満たした場合だけ補正モデルを昇格します。"
     )
     st.caption(
-        "Ver.1.11の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
-        "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
-        "Streamlitアプリが再デプロイされることはありません。"
+        "学習データ・評価結果・昇格した補正モデルは prediction-history ブランチへ保存します。"
+        "基準HistGradientBoostingモデルは自動で上書きせず、オンライン補正だけを安全に差し替えます。"
     )
 
 st.caption(
