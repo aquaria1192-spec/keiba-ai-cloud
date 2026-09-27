@@ -733,6 +733,14 @@ with st.container(border=True):
                 f"未公開・取得失敗 {result['failed']}R／"
                 f"予想履歴なし {result['no_prediction']}R"
             )
+            evaluated=result.get("evaluated_races",0)
+            if evaluated:
+                st.write(
+                    f"**◎単勝** {result.get('main_win_hits',0)}/{evaluated}R "
+                    f"（{result.get('main_win_rate',0)*100:.1f}%）　／　"
+                    f"**◎3着内** {result.get('main_top3_hits',0)}/{evaluated}R "
+                    f"（{result.get('main_top3_rate',0)*100:.1f}%）"
+                )
         except Exception as ex:
             progress.empty()
             st.error(f"1日まとめて答え合わせできませんでした：{ex}")
