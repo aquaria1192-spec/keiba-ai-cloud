@@ -23,7 +23,7 @@ ADAPTER_PATH = "automation_data/learning/online_adapter.joblib"
 ADAPTER_METRICS_PATH = "automation_data/learning/adapter_metrics.json"
 MIN_NEW_RACES = int(os.environ.get("KEIBA_LEARNING_MIN_RACES", "200"))
 VALID_RATIO = float(os.environ.get("KEIBA_LEARNING_VALID_RATIO", "0.20"))
-BASE_CHAMPION_VERSION = "base-1.11"
+BASE_CHAMPION_VERSION = "base-1.12-calibrated"
 
 ADAPTER_INPUTS = [
     "raw_win_prob",
@@ -152,8 +152,9 @@ def learning_rows_from_detail(detail, snapshot, current_champion_version):
     out["trainer"] = d.get("trainer", "").astype(str) if "trainer" in d.columns else ""
     out["true_date"] = True
     out["feature_source"] = "automation_pre_race"
-    # raw_* is the unadapted HistGB + race-day-adjustment output. It is
-    # preserved across adapter generations so a newly promoted adapter always
+    # raw_* is the statically calibrated HistGB + race-day-adjustment output
+    # before any online adapter. It is preserved across adapter generations so
+    # a newly promoted adapter always
     # replaces the old correction instead of stacking on top of it.
     out["raw_win_prob"] = (
         _num_series(d, "raw_win_prob")
