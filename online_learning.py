@@ -26,8 +26,8 @@ VALID_RATIO = float(os.environ.get("KEIBA_LEARNING_VALID_RATIO", "0.20"))
 BASE_CHAMPION_VERSION = "base-1.11"
 
 ADAPTER_INPUTS = [
-    "base_win_prob",
-    "base_top3_prob",
+    "raw_win_prob",
+    "raw_top3_prob",
     "market_prob_norm",
     "market_rank_pct",
     "popularity_pct",
@@ -48,11 +48,11 @@ ADAPTER_INPUTS = [
     "field_size",
 ]
 MODEL_INPUTS = [
-    "logit_base_win",
-    "logit_base_top3",
+    "logit_raw_win",
+    "logit_raw_top3",
     "logit_market",
 ] + [c for c in ADAPTER_INPUTS if c not in {
-    "base_win_prob", "base_top3_prob", "market_prob_norm"
+    "raw_win_prob", "raw_top3_prob", "market_prob_norm"
 }]
 
 ID_COLS = [
@@ -60,6 +60,7 @@ ID_COLS = [
     "date", "course", "race_no", "race_name", "surface", "distance", "going",
     "horse_no", "horse_name", "jockey", "trainer",
     "true_date", "feature_source", "quality_flag", "missing_feature_count",
+    "raw_win_prob", "raw_top3_prob", "raw_ai_index",
     "base_win_prob", "base_top3_prob", "base_ai_index", "pred_rank", "pred_mark",
     "actual_finish", "actual_win", "actual_top3", "settled_at", "result_url",
 ]
@@ -151,6 +152,23 @@ def learning_rows_from_detail(detail, snapshot, current_champion_version):
     out["trainer"] = d.get("trainer", "").astype(str) if "trainer" in d.columns else ""
     out["true_date"] = True
     out["feature_source"] = "automation_pre_race"
+    # raw_* is the unadapted HistGB + race-day-adjustment output. It is
+    # preserved across adapter generations so a newly promoted adapter always
+    # replaces the old correction instead of stacking on top of it.
+    out["raw_win_prob"] = (
+        _num_series(d, "raw_win_prob")
+        if "raw_win_prob" in d.columns else _num_series(d, "win_prob")
+    )
+    out["raw_top3_prob"] = (
+        _num_series(d, "raw_top3_prob")
+        if "raw_top3_prob" in d.columns else _num_series(d, "top3_prob")
+    )
+    out["raw_ai_index"] = (
+        _num_series(d, "raw_ai_index")
+        if "raw_ai_index" in d.columns else _num_series(d, "ai_index")
+    )
+    # base_* is the probability actually deployed for this race after the
+    # current champion adapter (or raw model when no adapter exists).
     out["base_win_prob"] = _num_series(d, "win_prob")
     out["base_top3_prob"] = _num_series(d, "top3_prob")
     out["base_ai_index"] = _num_series(d, "ai_index")
@@ -211,11 +229,11 @@ def apply_learning_result(rows, snapshot_id, finish_map, result_url, settled_at)
 
 def _adapter_frame(df):
     out = pd.DataFrame(index=df.index)
-    bw = pd.to_numeric(df.get("base_win_prob", df.get("win_prob")), errors="coerce").clip(1e-5, 1-1e-5)
-    bt = pd.to_numeric(df.get("base_top3_prob", df.get("top3_prob")), errors="coerce").clip(1e-5, 1-1e-5)
+    bw = pd.to_numeric(df.get("raw_win_prob", df.get("base_win_prob")), errors="coerce").clip(1e-5, 1-1e-5)
+    bt = pd.to_numeric(df.get("raw_top3_prob", df.get("base_top3_prob")), errors="coerce").clip(1e-5, 1-1e-5)
     mp = pd.to_numeric(df.get("market_prob_norm"), errors="coerce").clip(1e-5, 1-1e-5)
-    out["logit_base_win"] = np.log(bw / (1 - bw))
-    out["logit_base_top3"] = np.log(bt / (1 - bt))
+    out["logit_raw_win"] = np.log(bw / (1 - bw))
+    out["logit_raw_top3"] = np.log(bt / (1 - bt))
     out["logit_market"] = np.log(mp / (1 - mp))
     for c in MODEL_INPUTS:
         if c in out.columns:
@@ -302,13 +320,17 @@ def _predict_adapter(adapter, df):
     return p1, p3
 
 
-def _champion_predictions(adapter, df):
-    if adapter is None:
-        p1 = _normalize_by_race(pd.to_numeric(df["base_win_prob"], errors="coerce").fillna(0), df).to_numpy()
-        p3 = pd.to_numeric(df["base_top3_prob"], errors="coerce").fillna(0).clip(0.001, 0.995).to_numpy()
-        p3 = np.maximum(p3, p1)
-        return p1, p3
-    return _predict_adapter(adapter, df)
+def _champion_predictions(df):
+    """Return the probabilities that were actually deployed for each race."""
+    p1 = _normalize_by_race(
+        pd.to_numeric(df["base_win_prob"], errors="coerce").fillna(0), df
+    ).to_numpy()
+    p3 = (
+        pd.to_numeric(df["base_top3_prob"], errors="coerce")
+        .fillna(0).clip(0.001, 0.995).to_numpy()
+    )
+    p3 = np.maximum(p3, p1)
+    return p1, p3
 
 
 def _promotion_decision(champion_metrics, challenger_metrics):
@@ -344,16 +366,36 @@ def _ordered_race_keys(df):
     return (meta["date"].astype(str) + "|" + meta["course"].astype(str) + "|" + meta["race_no"].astype(str)).tolist()
 
 
-def _current_version_rows(rows, version):
+def _canonical_settled_rows(rows):
+    """
+    Keep one leakage-safe pre-race snapshot per race.
+
+    If more snapshot types are stored in the future, use the same evaluation
+    priority as the app: course_batch > pre_race > morning > manual, then the
+    latest snapshot within the selected type.
+    """
     q = normalize_learning_rows(rows)
-    q = q[q["champion_version"].astype(str) == str(version)].copy()
     q = q[pd.to_numeric(q["actual_finish"], errors="coerce").notna()].copy()
     q = q[pd.to_numeric(q["actual_win"], errors="coerce").notna()].copy()
     q = q[pd.to_numeric(q["actual_top3"], errors="coerce").notna()].copy()
     if q.empty:
         return q
+
     q["race_key"] = _race_key_frame(q)
-    return q
+    pri = {"course_batch": 4, "pre_race": 3, "morning": 2, "manual": 1}
+    q["_pri"] = q["snapshot_type"].astype(str).map(pri).fillna(0)
+    q["_dt"] = pd.to_datetime(q["recorded_at"], errors="coerce")
+
+    meta = (
+        q[["race_key", "snapshot_id", "_pri", "_dt"]]
+        .drop_duplicates()
+        .sort_values(["race_key", "_pri", "_dt"])
+        .groupby("race_key", as_index=False)
+        .tail(1)
+    )
+    keep = set(meta["snapshot_id"].astype(str))
+    q = q[q["snapshot_id"].astype(str).isin(keep)].copy()
+    return q.drop(columns=["_pri", "_dt"], errors="ignore")
 
 
 def load_adapter_from_store(store):
@@ -381,11 +423,19 @@ def load_adapter_public(
 
 
 def apply_online_adapter(detail, adapter):
-    if adapter is None or detail is None or len(detail) == 0:
+    if detail is None or len(detail) == 0:
         return detail
     d = detail.copy()
-    d["base_win_prob"] = pd.to_numeric(d.get("win_prob"), errors="coerce")
-    d["base_top3_prob"] = pd.to_numeric(d.get("top3_prob"), errors="coerce")
+
+    # Always freeze the unadapted probability first. This is the invariant
+    # that prevents recursive/double correction after future promotions.
+    d["raw_win_prob"] = pd.to_numeric(d.get("win_prob"), errors="coerce")
+    d["raw_top3_prob"] = pd.to_numeric(d.get("top3_prob"), errors="coerce")
+    d["raw_ai_index"] = pd.to_numeric(d.get("ai_index"), errors="coerce")
+    if adapter is None:
+        d["online_adapter_version"] = ""
+        return d
+
     p1, p3 = _predict_adapter(adapter, d)
     d["win_prob"] = p1
     d["top3_prob"] = p3
@@ -425,13 +475,12 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
     rows = load_learning_rows(store)
     current_adapter = load_adapter_from_store(store)
     current_version = champion_version(current_adapter)
-    q = _current_version_rows(rows, current_version)
+    q = _canonical_settled_rows(rows)
 
     status = store.read_json(LEARNING_STATUS_PATH) or {}
-    version_state = dict((status.get("versions") or {}).get(current_version) or {})
     race_keys = _ordered_race_keys(q) if len(q) else []
     total_races = len(race_keys)
-    last_evaluated = int(version_state.get("last_evaluated_race_count", 0) or 0)
+    last_evaluated = int(status.get("last_evaluated_race_count", 0) or 0)
     new_races = total_races - last_evaluated
 
     result = {
@@ -444,14 +493,12 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
     }
 
     if total_races < max(80, int(min_new_races)) or new_races < int(min_new_races):
-        version_state.update({
+        status.update({
             "last_seen_race_count": total_races,
             "last_status": "waiting",
             "last_checked_at": result["checked_at"],
+            "latest": result,
         })
-        versions = dict(status.get("versions") or {})
-        versions[current_version] = version_state
-        status.update({"versions": versions, "latest": result})
         store.write_json(LEARNING_STATUS_PATH, status, "Update online learning wait status")
         return result
 
@@ -482,7 +529,7 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
         "model_inputs": MODEL_INPUTS,
     }
 
-    champ_p1, champ_p3 = _champion_predictions(current_adapter, valid)
+    champ_p1, champ_p3 = _champion_predictions(valid)
     cand_p1, cand_p3 = _predict_adapter(candidate, valid)
     champ_metrics = _metric_block(valid, champ_p1, champ_p3)
     cand_metrics = _metric_block(valid, cand_p1, cand_p3)
@@ -497,7 +544,7 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
         "decision": decision,
     })
 
-    version_state.update({
+    status.update({
         "last_evaluated_race_count": total_races,
         "last_seen_race_count": total_races,
         "last_status": result["status"],
@@ -526,9 +573,7 @@ def run_online_learning(store, min_new_races=MIN_NEW_RACES):
         store.write_bytes(ADAPTER_PATH, bio.getvalue(), f"Promote online adapter {promoted['version']}")
         result["promoted_version"] = promoted["version"]
 
-    versions = dict(status.get("versions") or {})
-    versions[current_version] = version_state
-    status.update({"versions": versions, "latest": result})
+    status.update({"latest": result})
     store.write_json(LEARNING_STATUS_PATH, status, f"Update online learning status {result['status']}")
     store.write_json(ADAPTER_METRICS_PATH, result, f"Save online learning metrics {result['status']}")
     return result
