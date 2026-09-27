@@ -41,6 +41,10 @@ jobs:
               try:
                   with open(seed_path, "r", encoding="utf-8") as f:
                       seed = json.load(f)
+                  if isinstance(seed, dict):
+                      seed = seed.get("courses", [])
+                  if not isinstance(seed, list):
+                      seed = []
               except Exception:
                   seed = []
 
