@@ -180,7 +180,7 @@ def snapshot_race(
     detail["bet_budget"]=int(meta.get("予算",AUTO_BET_BUDGET))
     detail["bet_plan_json"]=plan_to_json(plan)
 
-    snap=prediction_snapshot(detail,app_version="1.8.1")
+    snap=prediction_snapshot(detail,app_version="1.8.2")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):

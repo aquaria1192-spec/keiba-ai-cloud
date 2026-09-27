@@ -117,6 +117,18 @@ def _session():
     })
     return s
 
+
+def _normalize_going_token(v):
+    x=str(v or "").strip()
+    if x in ("稍","稍重"):
+        return "稍重"
+    if x in ("良","重","不良"):
+        return x
+    # Known JRA mojibake for 稍重 can appear as "�c重" etc.
+    if "�" in x and x.endswith("重"):
+        return "稍重"
+    return ""
+
 def _decode_html(content: bytes) -> str:
     for enc in ("euc_jp", "cp932", "utf-8"):
         try:
@@ -257,8 +269,8 @@ def parse_shutuba_html(html: str, race_id: str, target_date: date, odds_map=None
     surface = "ダート" if raw_surface == "ダ" else "芝"
     distance = int(sm.group(2))
 
-    gm = re.search(r"馬場\s*[:：]\s*(良|稍重|重|不良)", all_meta)
-    going = gm.group(1) if gm else ""
+    gm = re.search(r"馬場\s*[:：]\s*(不良|稍重|稍|良|重)", all_meta)
+    going = _normalize_going_token(gm.group(1) if gm else "")
 
     tables = pd.read_html(StringIO(html))
     table = None
@@ -379,8 +391,8 @@ def parse_daily_shutuba_html(html: str, race_id: str, target_date: date) -> pd.D
     surface = meta_match.group(1)
     distance = int(meta_match.group(2))
 
-    gm = re.search(r"(?:馬場|馬場状態)\s*[:：]?\s*(良|稍重|重|不良)", text)
-    going = gm.group(1) if gm else ""
+    gm = re.search(r"(?:馬場|馬場状態)\s*[:：]?\s*(不良|稍重|稍|良|重)", text)
+    going = _normalize_going_token(gm.group(1) if gm else "")
 
     tables = pd.read_html(StringIO(html))
     table = None
@@ -643,10 +655,14 @@ def parse_jra_official_html(html: str, race_id: str, target_date: date) -> pd.Da
         surface = cm2.group(1)
         distance = int(cm2.group(2))
 
-    gm = re.search(r"(?:芝|ダート)\s*[:：]\s*(良|稍重|重|不良)", text)
+    gm = re.search(
+        r"(?:芝|ダート)\s*[:：]?\s*(不良|稍重|稍|良|重|�.?重)", text
+    )
     if not gm:
-        gm = re.search(r"(?:馬場|馬場状態)\s*[:：]?\s*(良|稍重|重|不良)", text)
-    going = gm.group(1) if gm else ""
+        gm = re.search(
+            r"(?:馬場|馬場状態)\s*[:：]?\s*(不良|稍重|稍|良|重|�.?重)", text
+        )
+    going = _normalize_going_token(gm.group(1) if gm else "")
 
     tables = pd.read_html(StringIO(html))
     table = None

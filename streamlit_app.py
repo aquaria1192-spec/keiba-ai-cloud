@@ -30,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.8.1",
+    page_title="競馬予想AI Cloud Ver.1.8.2",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -74,9 +74,14 @@ def fetch_entries_cached(date_iso: str):
     return fetch_entries_cloud(pd.Timestamp(date_iso).date())
 
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_context_cached(date_iso: str, courses_tuple, official_items=()):
+def fetch_context_cached(
+    date_iso: str, courses_tuple, official_items=(), race_surface_pairs=()
+):
     return fetch_day_contexts(
-        pd.Timestamp(date_iso).date(), list(courses_tuple), dict(official_items)
+        pd.Timestamp(date_iso).date(),
+        list(courses_tuple),
+        dict(official_items),
+        list(race_surface_pairs),
     )
 
 @st.cache_data(ttl=90, show_spinner=False)
@@ -128,10 +133,20 @@ def show_day_context(contexts):
                 st.caption("取得元："+" / ".join(srcs))
             if ctx.get("live_condition_ok"):
                 st.success("JRA公式当日出馬表から現在の馬場・天候を取得できています。")
+            elif ctx.get("current_condition_ok"):
+                st.success(
+                    "JRA公式への直接取得はできませんでしたが、"
+                    "同日の公開出馬表から現在の馬場・天候を取得できています。"
+                )
             else:
-                st.warning("JRA公式当日出馬表から現在値を取得できていません。下の取得診断を確認してください。")
+                st.warning(
+                    "現在の馬場状態を取得できていません。"
+                    "下の「馬場取得診断」を確認してください。"
+                )
             if ctx.get("live_source_urls"):
-                st.caption("当日公式ページ："+str(ctx.get("live_source_urls")[0]))
+                st.caption("JRA当日公式ページ："+str(ctx.get("live_source_urls")[0]))
+            elif ctx.get("public_source_urls"):
+                st.caption("当日公開出馬表："+str(ctx.get("public_source_urls")[0]))
             if ctx.get("condition_errors"):
                 with st.expander("馬場取得診断"):
                     for err in ctx.get("condition_errors")[-8:]:
@@ -227,8 +242,8 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.8.1")
-st.caption("JRA当日馬場取得修正＋騎手データ強化＋自動答え合わせ・回収率集計")
+st.title("🏇 競馬予想AI Cloud Ver.1.8.2")
+st.caption("当日馬場3段階取得＋騎手データ強化＋自動答え合わせ・回収率集計")
 
 st.markdown("""
 <div class="hero">
@@ -279,7 +294,18 @@ with st.container(border=True):
                 entries,info=fetch_entries_cached(target_date.isoformat())
                 courses=tuple(sorted(entries["course"].dropna().astype(str).unique()))
                 official_items=tuple(sorted((info.get("official_entry_urls") or {}).items()))
-                contexts=fetch_context_cached(target_date.isoformat(),courses,official_items)
+                rsp=(
+                    entries[["course","race_no","surface"]]
+                    .drop_duplicates()
+                    .copy()
+                )
+                race_surface_pairs=tuple(
+                    (str(r["course"]),int(r["race_no"]),str(r["surface"]))
+                    for _,r in rsp.iterrows()
+                )
+                contexts=fetch_context_cached(
+                    target_date.isoformat(),courses,official_items,race_surface_pairs
+                )
                 contexts=merge_entry_conditions(contexts,entries)
                 entries,going_changed=apply_official_going(entries,contexts,target_date)
                 features=enrich_entries_cloud(entries,feature_store)
@@ -653,7 +679,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.8.1の自己評価について"):
+with st.expander("Ver.1.8.2の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -663,7 +689,7 @@ with st.expander("Ver.1.8.1の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.8.1の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.8.2の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )

@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from auto_data_builder import (
-    _session, _jra_signature_for_race_id, all_known_race_ids,
+    _session, _decode_html, _jra_signature_for_race_id, all_known_race_ids,
     VENUE_CODE, _flatten_columns, _find_col
 )
 from batch_predict import mark_for_rank, mark_label
@@ -404,6 +404,144 @@ def fetch_jra_live_entry_contexts(target_date: date, courses=None, entry_url_map
             out.setdefault(course,{"course":course})
             out[course].setdefault("condition_errors",[]).extend(errors)
     return out
+def parse_public_race_condition_html(html: str, race_id: str, source_url="") -> dict:
+    """
+    Parse the current race header from the already-used public race-card source.
+
+    Typical header:
+      15:40発走 / 芝1200m (...) / 天候:曇 / 馬場:稍
+
+    "稍" is normalized to the model's historical label "稍重".
+    """
+    soup=BeautifulSoup(html or "","lxml")
+    rd1=soup.select_one("div.RaceData01")
+    rd2=soup.select_one("div.RaceData02")
+    bits=[]
+    if rd1:
+        bits.append(_clean(rd1.get_text(" ",strip=True)))
+    if rd2:
+        bits.append(_clean(rd2.get_text(" ",strip=True)))
+    if not bits:
+        bits.append(_clean(soup.get_text(" ",strip=True))[:2500])
+    text=" ".join(bits)
+
+    sm=re.search(r"(芝|ダ(?:ート)?)\s*(\d{3,4})m",text)
+    raw_surface=sm.group(1) if sm else ""
+    surface="ダート" if raw_surface.startswith("ダ") else ("芝" if raw_surface=="芝" else "")
+
+    wm=re.search(r"天候\s*[:：]\s*(晴|曇|雨|小雨|雪|小雪)",text)
+    weather=wm.group(1) if wm else ""
+
+    gm=re.search(r"馬場\s*[:：]\s*(不良|稍重|稍|良|重)",text)
+    gv=gm.group(1) if gm else ""
+    going="稍重" if gv=="稍" else gv
+    if going not in ("良","稍重","重","不良"):
+        going=""
+
+    return {
+        "race_id":race_id,
+        "course":VENUE_CODE.get(str(race_id)[4:6],""),
+        "race_no":int(str(race_id)[-2:]) if str(race_id)[-2:].isdigit() else None,
+        "surface":surface,
+        "going":going,
+        "jra_weather":weather,
+        "source_url":source_url,
+    }
+
+def _race_id_for_course_no(target_date,course,race_no):
+    for rid in all_known_race_ids(target_date):
+        if VENUE_CODE.get(str(rid)[4:6],"")==str(course) and int(str(rid)[-2:])==int(race_no):
+            return rid
+    return ""
+
+def fetch_public_live_contexts(
+    target_date: date,
+    courses,
+    race_surface_pairs=None,
+    session=None,
+) -> dict:
+    """
+    Fallback used when Streamlit Cloud cannot reach/parse JRA directly.
+    Fetch only one representative race per surface/course when possible.
+    """
+    s=session or _session()
+    wanted=list(dict.fromkeys(str(x) for x in (courses or []) if str(x)))
+    pairs=list(race_surface_pairs or [])
+
+    chosen={course:{} for course in wanted}
+    for item in pairs:
+        try:
+            course,race_no,surface=str(item[0]),int(item[1]),str(item[2])
+        except Exception:
+            continue
+        if course not in chosen or surface not in ("芝","ダート"):
+            continue
+        # Prefer later races because their page is usually the most current.
+        prev=chosen[course].get(surface)
+        if prev is None or race_no>prev:
+            chosen[course][surface]=race_no
+
+    # If the caller did not provide race/surface pairs, use a few candidate
+    # race pages and stop as soon as both surfaces are found.
+    known_by_course={course:[] for course in wanted}
+    for rid in all_known_race_ids(target_date):
+        course=VENUE_CODE.get(str(rid)[4:6],"")
+        if course in known_by_course:
+            known_by_course[course].append(rid)
+    for course in wanted:
+        known_by_course[course]=sorted(
+            known_by_course[course],
+            key=lambda x:int(str(x)[-2:]),
+            reverse=True
+        )
+
+    out={}
+    for course in wanted:
+        ctx={
+            "course":course,"jra_weather":"",
+            "turf_going":"","dirt_going":"",
+            "public_source_urls":[],
+            "public_condition_ok":False,
+            "public_condition_errors":[],
+        }
+        ids=[]
+        for surface,rn in chosen.get(course,{}).items():
+            rid=_race_id_for_course_no(target_date,course,rn)
+            if rid:
+                ids.append(rid)
+
+        # Add candidates only as needed, with a modest request cap.
+        for rid in known_by_course.get(course,[]):
+            if rid not in ids:
+                ids.append(rid)
+            if len(ids)>=6:
+                break
+
+        for rid in ids:
+            if ctx["turf_going"] and ctx["dirt_going"] and ctx["jra_weather"]:
+                break
+            url=f"https://race.netkeiba.com/race/shutuba.html?race_id={rid}"
+            try:
+                r=s.get(url,timeout=15)
+                r.raise_for_status()
+                html=_decode_html(r.content)
+                q=parse_public_race_condition_html(html,rid,url)
+                if q.get("jra_weather") and not ctx["jra_weather"]:
+                    ctx["jra_weather"]=q["jra_weather"]
+                if q.get("surface")=="芝" and q.get("going"):
+                    ctx["turf_going"]=q["going"]
+                elif q.get("surface")=="ダート" and q.get("going"):
+                    ctx["dirt_going"]=q["going"]
+                if q.get("going") or q.get("jra_weather"):
+                    ctx["public_source_urls"].append(url)
+                    ctx["public_condition_ok"]=True
+            except Exception as e:
+                ctx["public_condition_errors"].append(
+                    f"{rid}: {type(e).__name__}: {e}"
+                )
+        out[course]=ctx
+    return out
+
 def merge_entry_conditions(contexts: dict, entries: pd.DataFrame) -> dict:
     """Fallback: expose the going already present in acquired race-card rows."""
     out={k:dict(v) for k,v in (contexts or {}).items()}
@@ -423,6 +561,13 @@ def merge_entry_conditions(contexts: dict, entries: pd.DataFrame) -> dict:
                 if "JRA公式出馬表（当日）" not in live_source:
                     ctx[key]=vals.mode().iloc[0]
                     ctx[key+"_source"]="取得出走表（当日）"
+        # If same-day acquired race rows contain a valid going, the app has
+        # a current condition even when JRA direct access failed.
+        if (
+            ctx.get("turf_going") in ("良","稍重","重","不良") or
+            ctx.get("dirt_going") in ("良","稍重","重","不良")
+        ):
+            ctx["current_condition_ok"]=True
         ctx.setdefault("is_target_date",True)
     return out
 
@@ -494,39 +639,88 @@ def fetch_weather_context(course: str, target_date: date, session=None) -> dict:
     except Exception as e:
         return {"error":str(e),"source":"Open-Meteo"}
 
-def fetch_day_contexts(target_date: date, courses, entry_url_map=None) -> dict:
+def fetch_day_contexts(
+    target_date: date,
+    courses,
+    entry_url_map=None,
+    race_surface_pairs=None,
+) -> dict:
     courses=list(dict.fromkeys([str(x) for x in courses if str(x)]))
     s=_session()
+
+    # 1) JRA official track-information page.
     jra=fetch_jra_baba_contexts(target_date,courses,s)
-    live=fetch_jra_live_entry_contexts(target_date,courses,entry_url_map,s)
+
+    # 2) JRA official same-day race-card header.
+    live=fetch_jra_live_entry_contexts(
+        target_date,courses,entry_url_map,s
+    )
+
+    # 3) Public current race-card fallback. This is especially important on
+    # Streamlit Cloud when JRA direct requests are rejected upstream.
+    public=fetch_public_live_contexts(
+        target_date,courses,race_surface_pairs,s
+    )
+
     out={}
     for course in courses:
         ctx=dict(jra.get(course,{"course":course}))
         ctx["course"]=course
         lv=live.get(course) or {}
-        # Race-card header is the primary same-day source for going/weather.
+        pv=public.get(course) or {}
+
+        # JRA same-day source is always preferred.
         if lv.get("turf_going"):
             ctx["turf_going"]=lv["turf_going"]
             ctx["turf_going_source"]="JRA公式出馬表（当日）"
+        elif pv.get("turf_going"):
+            ctx["turf_going"]=pv["turf_going"]
+            ctx["turf_going_source"]="公開出馬表（当日）"
+
         if lv.get("dirt_going"):
             ctx["dirt_going"]=lv["dirt_going"]
             ctx["dirt_going_source"]="JRA公式出馬表（当日）"
+        elif pv.get("dirt_going"):
+            ctx["dirt_going"]=pv["dirt_going"]
+            ctx["dirt_going_source"]="公開出馬表（当日）"
+
         if lv.get("jra_weather"):
             ctx["jra_weather"]=lv["jra_weather"]
             ctx["weather_source"]="JRA公式出馬表（当日）"
+        elif pv.get("jra_weather"):
+            ctx["jra_weather"]=pv["jra_weather"]
+            ctx["weather_source"]="公開出馬表（当日）"
+
         if lv.get("race_date"):
             ctx["live_race_date"]=lv["race_date"]
         if lv.get("source_urls"):
             ctx["live_source_urls"]=lv["source_urls"]
+        if pv.get("public_source_urls"):
+            ctx["public_source_urls"]=pv["public_source_urls"]
+
         ctx["live_condition_ok"]=bool(lv.get("live_condition_ok"))
-        ctx["condition_errors"]=list(lv.get("condition_errors") or [])
-        ctx["is_target_date"]=bool(
-            lv.get("is_target_date") or ctx.get("race_date")==target_date.isoformat()
+        ctx["public_condition_ok"]=bool(pv.get("public_condition_ok"))
+        ctx["current_condition_ok"]=bool(
+            ctx["live_condition_ok"] or
+            ctx["public_condition_ok"] or
+            ctx.get("turf_going") in ("良","稍重","重","不良") or
+            ctx.get("dirt_going") in ("良","稍重","重","不良")
         )
+        ctx["condition_errors"]=(
+            list(lv.get("condition_errors") or []) +
+            list(pv.get("public_condition_errors") or [])
+        )
+
+        # Public fallback is tied to the requested target date/race IDs.
+        ctx["is_target_date"]=bool(
+            lv.get("is_target_date") or
+            pv.get("public_condition_ok") or
+            ctx.get("race_date")==target_date.isoformat()
+        )
+
         ctx["weather"]=fetch_weather_context(course,target_date,s)
         out[course]=ctx
     return out
-
 def apply_official_going(entries: pd.DataFrame, contexts: dict, target_date: date):
     out=entries.copy()
     if "going" not in out.columns:
