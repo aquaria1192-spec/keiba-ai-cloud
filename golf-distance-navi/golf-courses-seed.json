@@ -1,0 +1,23 @@
+{
+  "courses": [
+    {
+      "osm_type": "seed",
+      "osm_id": "yaita-country-club",
+      "lat": null,
+      "lon": null,
+      "name": "矢板カントリークラブ",
+      "names": {
+        "name": "矢板カントリークラブ",
+        "name:ja": "矢板カントリークラブ",
+        "official_name": "矢板カントリークラブ",
+        "alt_name": "",
+        "short_name": "",
+        "old_name": ""
+      },
+      "addr": {
+        "prefecture": "栃木県",
+        "city": "矢板市"
+      }
+    }
+  ]
+}
