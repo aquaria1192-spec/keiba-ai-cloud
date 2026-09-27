@@ -68,6 +68,14 @@ jobs:
           assert online_learning.MIN_NEW_RACES >= 200
           assert online_learning.BASE_CHAMPION_VERSION == "base-1.12-calibrated"
 
+          import joblib
+          pkg=joblib.load("data/cloud_model.joblib")
+          active=[
+              k for k,v in (pkg.get("weights") or {}).items()
+              if float(v)>0
+          ]
+          assert active == ["histgb"], f"unexpected active models: {active}"
+
           p1,p3=_calibrate_histgb_probabilities(
               pd.Series([0.60,0.30,0.10]),
               pd.Series([0.80,0.60,0.40]),
@@ -84,6 +92,7 @@ jobs:
           PY
 
       - name: Run automatic prediction / settlement / learning
+        if: github.event_name != 'push'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
