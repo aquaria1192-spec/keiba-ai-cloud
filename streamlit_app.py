@@ -737,6 +737,8 @@ with st.container(border=True):
                 st.write(
                     f"**◎単勝** {result.get('main_win_hits',0)}/{evaluated}R "
                     f"（{result.get('main_win_rate',0)*100:.1f}%）　／　"
+                    f"**◎2着** {result.get('main_second_hits',0)}/{evaluated}R "
+                    f"（{result.get('main_second_rate',0)*100:.1f}%）　／　"
                     f"**◎3着内** {result.get('main_top3_hits',0)}/{evaluated}R "
                     f"（{result.get('main_top3_rate',0)*100:.1f}%）"
                 )
@@ -807,10 +809,11 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                 "結果公開後に「この日の全レースをまとめて答え合わせ」を押してください。"
             )
         else:
-            a,b,c=st.columns(3)
+            a,b,c,d=st.columns(4)
             a.metric("評価済み",f"{metrics['races']}R")
             b.metric("◎単勝的中率","-" if pd.isna(metrics["main_win_rate"]) else f"{metrics['main_win_rate']*100:.1f}%")
-            c.metric("◎3着内率","-" if pd.isna(metrics["main_top3_rate"]) else f"{metrics['main_top3_rate']*100:.1f}%")
+            c.metric("◎2着率","-" if pd.isna(metrics["main_second_rate"]) else f"{metrics['main_second_rate']*100:.1f}%")
+            d.metric("◎3着内率","-" if pd.isna(metrics["main_top3_rate"]) else f"{metrics['main_top3_rate']*100:.1f}%")
 
             a,b,c=st.columns(3)
             a.metric("勝率Brier","-" if pd.isna(metrics["brier_win"]) else f"{metrics['brier_win']:.4f}")
@@ -819,7 +822,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
 
             st.caption(
                 "答え合わせは、開催地ごとに固定保存した予想と実際の着順を比較し、"
-                "◎本命の単勝的中率・3着内率、印別成績、確率精度を集計します。"
+                "◎本命の単勝的中率・2着率・3着内率、印別成績、確率精度を集計します。"
             )
 
             t1,t2,t3,t4=st.tabs(

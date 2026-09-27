@@ -528,7 +528,8 @@ def _main_answer_fields(snap):
     """Return answer-check fields for the saved ◎ horse."""
     if snap is None or len(snap)==0:
         return {
-            "◎本命":"","◎着順":"","◎単勝":"判定不可","◎3着内":"判定不可",
+            "◎本命":"","◎着順":"","◎単勝":"判定不可",
+            "◎2着":"判定不可","◎3着内":"判定不可",
         }
     q=snap[snap["mark"].astype(str)=="◎"].copy()
     if q.empty:
@@ -541,13 +542,15 @@ def _main_answer_fields(snap):
     fi=pd.to_numeric(pd.Series([r.get("actual_finish")]),errors="coerce").iloc[0]
     if pd.isna(fi):
         return {
-            "◎本命":main_text,"◎着順":"","◎単勝":"未判定","◎3着内":"未判定",
+            "◎本命":main_text,"◎着順":"","◎単勝":"未判定",
+            "◎2着":"未判定","◎3着内":"未判定",
         }
     fi=int(fi)
     return {
         "◎本命":main_text,
         "◎着順":fi,
         "◎単勝":"的中" if fi==1 else "不的中",
+        "◎2着":"的中" if fi==2 else "不的中",
         "◎3着内":"的中" if fi<=3 else "不的中",
     }
 
@@ -724,6 +727,7 @@ def settle_day_snapshots(
         report["状態"].isin(["照合完了","照合済み"])
     ].copy() if len(report) else pd.DataFrame()
     win_hits=int((evaluated.get("◎単勝",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
+    second_hits=int((evaluated.get("◎2着",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     top3_hits=int((evaluated.get("◎3着内",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     evaluated_races=int(len(evaluated))
     return {
@@ -735,8 +739,10 @@ def settle_day_snapshots(
         "no_prediction":int(counts.get("予想履歴なし",0)),
         "evaluated_races":evaluated_races,
         "main_win_hits":win_hits,
+        "main_second_hits":second_hits,
         "main_top3_hits":top3_hits,
         "main_win_rate":win_hits/evaluated_races if evaluated_races else np.nan,
+        "main_second_rate":second_hits/evaluated_races if evaluated_races else np.nan,
         "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
         "report":report,
     }
@@ -763,8 +769,8 @@ def evaluation_metrics(history):
     if h.empty:
         return {
             "races":0,"horses":0,
-            "main_win_hits":0,"main_top3_hits":0,
-            "main_win_rate":np.nan,"main_top3_rate":np.nan,
+            "main_win_hits":0,"main_second_hits":0,"main_top3_hits":0,
+            "main_win_rate":np.nan,"main_second_rate":np.nan,"main_top3_rate":np.nan,
             "brier_win":np.nan,"brier_top3":np.nan,"log_loss":np.nan,
         },h
 
@@ -772,6 +778,10 @@ def evaluation_metrics(history):
         h[c]=pd.to_numeric(h[c],errors="coerce")
     races=int(h[["date","course","race_no"]].drop_duplicates().shape[0])
     main=h[h["mark"].astype(str)=="◎"].copy()
+    if len(main):
+        main["actual_finish_num"]=pd.to_numeric(
+            main["actual_finish"],errors="coerce"
+        )
     eps=1e-9
     wp=h["win_prob"].clip(eps,1-eps)
     tp=h["top3_prob"].clip(eps,1-eps)
@@ -781,8 +791,10 @@ def evaluation_metrics(history):
     return {
         "races":races,"horses":int(len(h)),
         "main_win_hits":int(pd.to_numeric(main["actual_win"],errors="coerce").fillna(0).sum()) if len(main) else 0,
+        "main_second_hits":int((main["actual_finish_num"]==2).sum()) if len(main) else 0,
         "main_top3_hits":int(pd.to_numeric(main["actual_top3"],errors="coerce").fillna(0).sum()) if len(main) else 0,
         "main_win_rate":float(main["actual_win"].mean()) if len(main) else np.nan,
+        "main_second_rate":float((main["actual_finish_num"]==2).mean()) if len(main) else np.nan,
         "main_top3_rate":float(main["actual_top3"].mean()) if len(main) else np.nan,
         "brier_win":float(np.mean((wp-h["actual_win"])**2)),
         "brier_top3":float(np.mean((tp-h["actual_top3"])**2)),

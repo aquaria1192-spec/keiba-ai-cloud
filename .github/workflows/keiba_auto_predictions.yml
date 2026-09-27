@@ -149,11 +149,18 @@ jobs:
           assert metrics["races"] == 2
           assert metrics["main_win_hits"] == 1
           assert abs(metrics["main_win_rate"]-0.5) < 1e-12
+          assert metrics["main_second_hits"] == 1
+          assert abs(metrics["main_second_rate"]-0.5) < 1e-12
           assert metrics["main_top3_hits"] == 2
           assert abs(metrics["main_top3_rate"]-1.0) < 1e-12
           answer=evaluation_store._main_answer_fields(sample[sample["snapshot_id"]=="r1"])
           assert answer["◎単勝"] == "的中"
+          assert answer["◎2着"] == "不的中"
           assert answer["◎3着内"] == "的中"
+          answer2=evaluation_store._main_answer_fields(sample[sample["snapshot_id"]=="r2"])
+          assert answer2["◎単勝"] == "不的中"
+          assert answer2["◎2着"] == "的中"
+          assert answer2["◎3着内"] == "的中"
           print("Regression smoke checks OK")
           PY
 
