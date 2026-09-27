@@ -10,8 +10,7 @@ import streamlit as st
 
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
-from batch_predict import batch_predict_day
-from betting_tools import mark_legend
+from batch_predict import batch_predict_day, mark_legend
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
