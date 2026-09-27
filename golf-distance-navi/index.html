@@ -211,7 +211,12 @@ function defaultHole(){return{par:4,score:null,putts:null,ob:0,penalty:0,teeClub
 function normalizeRound(r){
   if(!Array.isArray(r.holes))r.holes=[];
   while(r.holes.length<18)r.holes.push(defaultHole());
-  r.holes=r.holes.slice(0,18).map(function(h){return Object.assign(defaultHole(),h||{})});
+  r.holes=r.holes.slice(0,18).map(function(h){
+    var x=Object.assign(defaultHole(),h||{});
+    if(x.fw==="yes")x.fw="hit";
+    else if(x.fw==="no")x.fw=null;
+    return x;
+  });
   return r;
 }
 function saveRounds(){save("gdn_rounds",state.rounds)}
