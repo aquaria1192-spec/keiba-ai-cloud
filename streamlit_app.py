@@ -31,7 +31,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.10",
+    page_title="競馬予想AI Cloud Ver.1.11",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -264,7 +264,8 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.10")
+st.title("🏇 競馬予想AI Cloud Ver.1.11")
+st.caption("精度強化モデル：騎手・調教師の条件別成績と馬場適性をAI本体で学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
 
 st.markdown("""
@@ -347,7 +348,7 @@ with st.container(border=True):
 
             # 当日データを取り直したら、開催地一括予想も必ず作り直す。
             st.session_state["cloud_course_prediction_cache"]={}
-            st.session_state.pop("_saved_fp_110",None)
+            st.session_state.pop("_saved_fp_111",None)
 
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
@@ -553,7 +554,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.10",
+                                "1.11",
                                 snapshot_type="course_batch",
                             )
                         except Exception as save_ex:
@@ -682,7 +683,7 @@ with st.container(border=True):
                     )
                 )
 
-                st.session_state["_saved_fp_110"]=fingerprint
+                st.session_state["_saved_fp_111"]=fingerprint
                 st.caption(
                     "答え合わせは、レース選択時の表示ではなく、"
                     "開催地を選んだ時点で固定保存した一括予想を使用します。"
@@ -967,7 +968,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.10の自己評価について"):
+with st.expander("Ver.1.11の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -977,7 +978,7 @@ with st.expander("Ver.1.10の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.10の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.11の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )

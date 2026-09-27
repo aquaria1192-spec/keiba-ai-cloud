@@ -1035,25 +1035,13 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
         jockey_adj=0.0
         jrs=[]
 
-        # 1) Historical aptitude for today's official going.
-        hgr=pd.to_numeric(pd.Series([r.get("going_top3_rate")]),errors="coerce").iloc[0]
+        # 1) Historical going aptitude is learned directly by Ver.1.11 model.
+        # Do not add it again as a heuristic post-model adjustment.
+        hgr=pd.to_numeric(pd.Series([r.get("horse_going_top3_rate")]),errors="coerce").iloc[0]
         ggr=pd.to_numeric(pd.Series([r.get("going_global_top3_rate")]),errors="coerce").iloc[0]
         starts=pd.to_numeric(pd.Series([r.get("going_starts")]),errors="coerce").iloc[0]
-        if pd.notna(hgr) and pd.notna(ggr):
-            n=max(float(starts) if pd.notna(starts) else 0.0,0.0)
-            shrink=(n*hgr+5.0*ggr)/(n+5.0)
-            fit=shrink-ggr
-            amp=1.0
-            if surface=="芝" and pd.notna(cushion) and cushion<8.0:
-                amp*=1.12
-            if pd.notna(precip) and precip>=0.5:
-                amp*=1.08
-            elif pd.notna(precip_prob) and precip_prob>=60:
-                amp*=1.04
-            a=float(np.clip(fit*15.0*amp,-2.4,2.4))
-            if abs(a)>=0.15:
-                adj += a
-                rs.append(f"{official_going or '当日馬場'}適性 {a:+.1f}")
+        if pd.notna(hgr) and pd.notna(ggr) and pd.notna(starts) and starts>=3:
+            rs.append(f"馬場適性はAI学習済み({int(starts)}走)")
 
         # 2) Same-day inside/outside bias.
         no=pd.to_numeric(pd.Series([r.get("horse_no")]),errors="coerce").iloc[0]
@@ -1074,30 +1062,12 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
                 adj += a
                 rs.append(f"脚質傾向 {a:+.1f}")
 
-        # 4) Jockey condition fit. Overall jockey_top3_rate is already included
-        # in the learned model, so only course/surface/distance/going/trainer
-        # interaction deltas are added here to avoid double counting.
+        # 4) Jockey condition fit is learned directly by Ver.1.11 model
+        # (course/surface/distance/going/trainer interactions). Avoid double counting.
         overall=pd.to_numeric(pd.Series([r.get("jockey_top3_rate")]),errors="coerce").iloc[0]
-        pieces=[]
-        for label,rc,sc,w in [
-            ("競馬場","jockey_course_top3_rate","jockey_course_starts",1.0),
-            ("芝ダ","jockey_surface_top3_rate","jockey_surface_starts",0.8),
-            ("距離","jockey_distance_top3_rate","jockey_distance_starts",0.9),
-            ("馬場","jockey_going_top3_rate","jockey_going_starts",0.8),
-            ("厩舎","jockey_trainer_top3_rate","jockey_trainer_starts",0.7),
-        ]:
-            rate=pd.to_numeric(pd.Series([r.get(rc)]),errors="coerce").iloc[0]
-            n=pd.to_numeric(pd.Series([r.get(sc)]),errors="coerce").iloc[0]
-            if pd.notna(overall) and pd.notna(rate) and pd.notna(n) and n>=2:
-                shrunk=(float(n)*float(rate)+10.0*float(overall))/(float(n)+10.0)
-                pieces.append((w,shrunk-float(overall),label,int(n)))
-        if pieces:
-            delta=sum(w*x for w,x,_,_ in pieces)/sum(w for w,_,_,_ in pieces)
-            a=float(np.clip(delta*10.0,-1.25,1.25))
-            if abs(a)>=0.08:
-                jockey_adj+=a
-                labels="・".join(f"{lab}{n}走" for _,_,lab,n in pieces[:3])
-                jrs.append(f"条件別{a:+.1f}({labels})")
+        jc_n=pd.to_numeric(pd.Series([r.get("jockey_course_starts")]),errors="coerce").iloc[0]
+        if pd.notna(jc_n) and jc_n>=3:
+            jrs.append(f"条件別騎手成績はAI学習済み({int(jc_n)}走以上)")
 
         # 5) Jockey's already-finished rides today at the same course.
         jockey=re.sub(r"\s+","",str(r.get("jockey","")).strip())
@@ -1137,14 +1107,19 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
 
     base_top3=pd.to_numeric(d["top3_prob"],errors="coerce").fillna(0)
     d["top3_prob"]=np.clip(base_top3*np.exp(d["当日補正"]/30.0),0.001,0.995)
-    d["ai_index"]=np.clip(d["基礎AI指数"]+d["当日補正"],0,100)
+    # Keep AI index for display, but marks/rank are determined primarily by
+    # adjusted win probability. This was more accurate in 2024-2025 holdout tests.
+    max_win=max(float(d["win_prob"].max()),1e-9)
+    recent=pd.to_numeric(d.get("recent_top3_rate"),errors="coerce").fillna(0).clip(0,1)
+    d["ai_index"]=np.clip(100*(0.65*(d["win_prob"]/max_win)+0.25*d["top3_prob"]+0.10*recent),0,100)
+    d["prediction_score"]=d["win_prob"]
 
     odds=pd.to_numeric(d.get("odds"),errors="coerce")
     implied=pd.to_numeric(d.get("implied_prob"),errors="coerce").fillna(0)
     d["expected_value"]=d["win_prob"]*odds
     d["value_gap"]=d["win_prob"]-implied
 
-    d=d.sort_values(["ai_index","win_prob"],ascending=False).reset_index(drop=True)
+    d=d.sort_values(["prediction_score","top3_prob","ai_index"],ascending=False).reset_index(drop=True)
     d["順位"]=range(1,len(d)+1)
     d["印"]=[mark_for_rank(i,len(d)) for i in d["順位"]]
     d["評価"]=d["印"].map(mark_label)

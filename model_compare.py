@@ -124,23 +124,29 @@ def ensemble_predict(entries, trained_models, weights):
     if total > 0:
         merged["win_prob"] = merged["win_prob"] / total
 
+    merged["top3_prob"] = np.maximum(merged["top3_prob"], merged["win_prob"])
     max_win = max(float(merged["win_prob"].max()), 1e-9)
     recent = pd.to_numeric(merged.get("recent_top3_rate"), errors="coerce").fillna(0).clip(0,1)
     merged["ai_index"] = np.clip(
         100 * (
-            0.50 * merged["top3_prob"] +
-            0.35 * (merged["win_prob"] / max_win) +
-            0.15 * recent
+            0.65 * (merged["win_prob"] / max_win) +
+            0.25 * merged["top3_prob"] +
+            0.10 * recent
         ),
         0, 100
     )
+    # Validation showed that selecting ◎ primarily by race-normalized win
+    # probability is more accurate than the legacy composite AI-index order.
+    merged["prediction_score"] = merged["win_prob"]
 
     odds = pd.to_numeric(merged.get("odds"), errors="coerce")
     implied = pd.to_numeric(merged.get("implied_prob"), errors="coerce").fillna(0)
     merged["expected_value"] = merged["win_prob"] * odds
     merged["value_gap"] = merged["win_prob"] - implied
 
-    return merged.sort_values(["ai_index","win_prob"], ascending=False).reset_index(drop=True)
+    return merged.sort_values(
+        ["prediction_score","top3_prob","ai_index"], ascending=False
+    ).reset_index(drop=True)
 
 def ensemble_label(weights):
     parts = []

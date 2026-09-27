@@ -193,7 +193,7 @@ def numtext(v):
     x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
     return "" if pd.isna(x) else f"{float(x):.8f}"
 
-def prediction_snapshot(detail,app_version="1.10"):
+def prediction_snapshot(detail,app_version="1.11"):
     if detail is None or len(detail)==0:
         return blank_history()
 
@@ -251,7 +251,7 @@ def prediction_snapshot(detail,app_version="1.10"):
         })
     return norm_history(pd.DataFrame(rows))
 
-def save_prediction_if_new(backend,detail,app_version="1.10"):
+def save_prediction_if_new(backend,detail,app_version="1.11"):
     snap=prediction_snapshot(detail,app_version)
     if snap.empty:
         return {"saved":False,"message":"予想データなし"}
@@ -266,7 +266,7 @@ def save_prediction_if_new(backend,detail,app_version="1.10"):
 def save_course_batch_predictions(
     backend,
     detail,
-    app_version="1.10",
+    app_version="1.11",
     snapshot_type="course_batch",
 ):
     """

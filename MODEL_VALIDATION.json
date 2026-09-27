@@ -1,0 +1,38 @@
+{
+  "method": "2016-2023 train / 2024 and 2025 proxy-year holdout",
+  "date_caveat": "source dates are sequence_proxy, not exact calendar intervals",
+  "legacy_ver110_style": {
+    "2024": {
+      "top_pick_win_rate": 0.349263600841599,
+      "top_pick_top3_rate": 0.6627592425608656
+    },
+    "2025": {
+      "top_pick_win_rate": 0.3505624809972636,
+      "top_pick_top3_rate": 0.6676801459410155
+    }
+  },
+  "ver111": {
+    "2024": {
+      "races": 3327,
+      "top_pick_win_rate": 0.3609858731590021,
+      "top_pick_top3_rate": 0.6717763751127142,
+      "win_auc": 0.8483283259022719,
+      "win_logloss": 0.20959835657485132,
+      "win_brier": 0.05976748067219097,
+      "top3_auc": 0.834330478818281,
+      "top3_logloss": 0.5050594573092739,
+      "top3_brier": 0.17071463501773565
+    },
+    "2025": {
+      "races": 3289,
+      "top_pick_win_rate": 0.3697172392824567,
+      "top_pick_top3_rate": 0.6755852842809364,
+      "win_auc": 0.8546317391840795,
+      "win_logloss": 0.20669481839417458,
+      "win_brier": 0.05893155363741141,
+      "top3_auc": 0.8333763123769895,
+      "top3_logloss": 0.5069216988357899,
+      "top3_brier": 0.17169086934495237
+    }
+  }
+}

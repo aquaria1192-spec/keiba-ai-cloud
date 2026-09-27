@@ -1,21 +1,28 @@
-# Cloud Ver.1.10 更新手順
+# Cloud Ver.1.11 更新手順
 
-GitHub `keiba-ai-cloud` の main ブランチへ以下を上書きしてください。
+GitHub `keiba-ai-cloud` の main ブランチへ、差し替え用ZIPの内容を上書きしてください。
 
+必須更新:
 - streamlit_app.py
+- feature_engineering.py
+- cloud_features.py
+- ml_engine.py
+- model_compare.py
+- race_day_context.py
+- automation_runner.py
 - evaluation_store.py
 - README.md
-- CLOUD_DEPLOY手順.md
+- MODEL_VALIDATION.json
+- data/cloud_model.joblib
+- data/cloud_feature_store.joblib
 
-Commit changes 後、必要なら `Manage app → Reboot app` を実行してください。
+特に `data/cloud_model.joblib` と `data/cloud_feature_store.joblib` は必ず両方更新してください。片方だけ古いと特徴量が一致しません。
 
-## 使用手順
+更新後:
+1. Commit changes
+2. 必要なら Streamlit の `Manage app → Reboot app`
+3. 「最新データに更新」
+4. 開催地を選択して全レース一括予想
+5. 一括予想の固定保存を確認
 
-1. 「最新データに更新」
-2. 開催地を選択
-3. 全レース一括予想が完了するまで待つ
-4. `答え合わせ用として一括予想 ○R を固定保存しました` を確認
-5. レース詳細は必要なレースを選んで閲覧
-6. 結果公開後「この日の全レースをまとめて答え合わせ」
-
-答え合わせでは `course_batch` が最優先されます。
+Ver.1.11では本命順位を勝率モデル優先で決定します。

@@ -50,8 +50,37 @@ def _rolling_prior(df,key,col,window=5):
     out=(shifted.groupby(df[key],sort=False).rolling(window,min_periods=1).mean().reset_index(level=0,drop=True))
     return out.sort_index()
 
+def _add_race_relative_features(df):
+    out=df.copy()
+    if "race_id" in out.columns:
+        key=out["race_id"].astype(str)
+    else:
+        parts=[]
+        for c in ["date","course","race_no"]:
+            if c in out.columns: parts.append(out[c].astype(str))
+        if parts:
+            key=parts[0]
+            for p in parts[1:]: key=key+"|"+p
+        else:
+            key=pd.Series(np.arange(len(out)),index=out.index).astype(str)
+    out["field_size"]=out.groupby(key)["horse_no"].transform("count").astype(float)
+    implied=pd.to_numeric(out.get("implied_prob"),errors="coerce")
+    isum=implied.groupby(key).transform("sum")
+    out["market_prob_norm"]=implied.div(isum.where(isum>0))
+    odds=pd.to_numeric(out.get("odds"),errors="coerce")
+    out["market_rank_pct"]=odds.groupby(key).rank(method="average",ascending=True).div(out["field_size"])
+    pop=pd.to_numeric(out.get("popularity"),errors="coerce")
+    out["popularity_pct"]=pop.div(out["field_size"])
+    for c in [
+        "recent_top3_rate","jockey_top3_rate","trainer_top3_rate",
+        "distance_top3_rate","course_top3_rate","surface_top3_rate",
+    ]:
+        s=pd.to_numeric(out.get(c),errors="coerce")
+        out[c+"_rank_pct"]=s.groupby(key).rank(method="average",ascending=False).div(out["field_size"])
+    return out
+
 def build_history_features(raw_history):
-    """Large-data optimized leakage-aware feature generation."""
+    """Leakage-aware features. Every historical rate uses only prior starts."""
     df=normalize_columns(raw_history).copy(); missing=validate_raw_history(df)
     if missing: raise ValueError("過去結果CSVに必要な列がありません: "+", ".join(missing))
     df["date"]=pd.to_datetime(df["date"],errors="coerce")
@@ -60,13 +89,14 @@ def build_history_features(raw_history):
     for c in nums:
         if c not in df.columns: df[c]=np.nan
         df[c]=_num(df[c])
-    if "race_class" not in df.columns: df["race_class"]=np.nan
-    if "running_style" not in df.columns: df["running_style"]=np.nan
+    for c in ["race_class","running_style"]:
+        if c not in df.columns: df[c]=np.nan
     df["race_class_score"]=df["race_class"].map(_class_score)
     df["running_style_score"]=df["running_style"].map(_style_score)
     sort_cols=["date"]+(["race_day_seq"] if "race_day_seq" in df.columns else [])+["race_id","horse_no"]
     df=df.sort_values(sort_cols).reset_index(drop=True)
     df["_top3"]=(df["finish"]<=3).astype(float)
+
     gh=df.groupby("horse_name",sort=False)
     for src,dst in [("finish","prev_finish"),("margin","prev_margin"),("last3f_rank","prev_last3f_rank"),("distance","prev_distance"),("body_weight","prev_body_weight"),("race_class_score","prev_class_score"),("surface","prev_surface"),("date","prev_date")]:
         df[dst]=gh[src].shift(1)
@@ -74,8 +104,10 @@ def build_history_features(raw_history):
     df["days_since_last"]=(df["date"]-df["prev_date"]).dt.days
     df["body_weight_change_from_prev"]=df["body_weight"]-df["prev_body_weight"]
     df["class_change"]=df["race_class_score"]-df["prev_class_score"]
+
     for src,dst in [("finish","recent_avg_finish"),("_top3","recent_top3_rate"),("margin","recent_avg_margin"),("last3f_rank","recent_avg_last3f_rank"),("popularity","recent_avg_popularity")]:
         df[dst]=_rolling_prior(df,"horse_name",src,5)
+
     df["distance_top3_rate"]=_prior_mean(df,["horse_name","distance"])
     df["course_top3_rate"]=_prior_mean(df,["horse_name","course"])
     df["surface_top3_rate"]=_prior_mean(df,["horse_name","surface"])
@@ -83,78 +115,43 @@ def build_history_features(raw_history):
     df["trainer_top3_rate"]=_prior_mean(df,["trainer"])
     df["distance_bucket"]=(df["distance"]//400*400).astype("Int64")
     df["gate_condition_top3_rate"]=_prior_mean(df,["course","surface","distance_bucket","gate"])
+
+    # Ver.1.11: learned condition interactions rather than heuristic-only use.
+    df["horse_going_top3_rate"]=_prior_mean(df,["horse_name","surface","going"])
+    df["jockey_course_top3_rate"]=_prior_mean(df,["jockey","course"])
+    df["jockey_surface_top3_rate"]=_prior_mean(df,["jockey","surface"])
+    df["jockey_distance_top3_rate"]=_prior_mean(df,["jockey","distance_bucket"])
+    df["jockey_going_top3_rate"]=_prior_mean(df,["jockey","surface","going"])
+    df["jockey_trainer_top3_rate"]=_prior_mean(df,["jockey","trainer"])
+    df["trainer_course_top3_rate"]=_prior_mean(df,["trainer","course"])
+    df["trainer_surface_top3_rate"]=_prior_mean(df,["trainer","surface"])
+    df["trainer_distance_top3_rate"]=_prior_mean(df,["trainer","distance_bucket"])
+
     df["implied_prob"]=1/df["odds"].replace(0,np.nan)
     df["log_odds"]=np.log(df["odds"].clip(lower=1.01))
+    df=_add_race_relative_features(df)
+
     df["date"]=df["date"].dt.date.astype(str)
     df["prev_date"]=pd.to_datetime(df["prev_date"],errors="coerce").dt.date.astype(str)
     return df.drop(columns=["_top3"])
 
 def enrich_entries(raw_history,entries):
-    """Optimized for a large history and a small current entry table."""
-    hist=normalize_columns(raw_history).copy(); ent=normalize_columns(entries).copy()
-    mh=validate_raw_history(hist); me=validate_entries(ent)
-    if mh: raise ValueError("過去結果CSVに必要な列がありません: "+", ".join(mh))
-    if me: raise ValueError("出走表CSVに必要な列がありません: "+", ".join(me))
-    hist["_dt"]=pd.to_datetime(hist["date"],errors="coerce"); ent["_dt"]=pd.to_datetime(ent["date"],errors="coerce")
-    for c in ["finish","distance","body_weight","popularity","odds","margin","last3f_rank","gate"]:
-        if c not in hist.columns: hist[c]=np.nan
-        hist[c]=_num(hist[c])
-    for c in ["distance","body_weight","body_weight_diff","popularity","odds","gate"]:
-        if c not in ent.columns: ent[c]=np.nan
-        ent[c]=_num(ent[c])
-    for c in ["race_class","running_style"]:
-        if c not in hist.columns: hist[c]=np.nan
-        if c not in ent.columns: ent[c]=np.nan
-    hist["race_class_score"]=hist["race_class"].map(_class_score); ent["race_class_score"]=ent["race_class"].map(_class_score)
-    hist["_top3"]=(hist["finish"]<=3).astype(float)
-    hist["distance_bucket"]=(hist["distance"]//400*400).astype("Int64"); ent["distance_bucket"]=(ent["distance"]//400*400).astype("Int64")
-    result=[]
-    for dt,eg in ent.groupby("_dt",dropna=False,sort=False):
-        h=hist[hist["_dt"]<dt].copy() if pd.notna(dt) else hist.copy()
-        global_top3=float(h["_top3"].mean()) if len(h) else .20
-        global_finish=float(h["finish"].mean()) if len(h) else 8.0
-        global_margin=float(h["margin"].dropna().mean()) if h["margin"].notna().any() else 0.0
-        global_l3=float(h["last3f_rank"].dropna().mean()) if h["last3f_rank"].notna().any() else 8.0
-        global_pop=float(h["popularity"].dropna().mean()) if h["popularity"].notna().any() else 8.0
-        horses=set(eg["horse_name"].astype(str)); jockeys=set(eg["jockey"].astype(str)); trainers=set(eg["trainer"].astype(str))
-        hp=h[h["horse_name"].astype(str).isin(horses)].sort_values(["_dt","race_id","horse_no"])
-        prev_rows=hp.groupby(hp["horse_name"].astype(str),sort=False).tail(1) if len(hp) else hp
-        prev={str(r["horse_name"]):r for _,r in prev_rows.iterrows()}
-        last5=hp.groupby(hp["horse_name"].astype(str),sort=False,group_keys=False).tail(5) if len(hp) else hp
-        recent_finish=last5.groupby(last5["horse_name"].astype(str))["finish"].mean().to_dict() if len(last5) else {}
-        recent_margin=last5.groupby(last5["horse_name"].astype(str))["margin"].mean().to_dict() if len(last5) else {}
-        recent_l3=last5.groupby(last5["horse_name"].astype(str))["last3f_rank"].mean().to_dict() if len(last5) else {}
-        recent_pop=last5.groupby(last5["horse_name"].astype(str))["popularity"].mean().to_dict() if len(last5) else {}
-        recent_top3=last5.groupby(last5["horse_name"].astype(str))["_top3"].mean().to_dict() if len(last5) else {}
-        hd=hp.groupby([hp["horse_name"].astype(str),"distance"])["_top3"].mean().to_dict() if len(hp) else {}
-        hc=hp.groupby([hp["horse_name"].astype(str),hp["course"].astype(str)])["_top3"].mean().to_dict() if len(hp) else {}
-        hs=hp.groupby([hp["horse_name"].astype(str),hp["surface"].astype(str)])["_top3"].mean().to_dict() if len(hp) else {}
-        hj_src=h[h["jockey"].astype(str).isin(jockeys)]
-        ht_src=h[h["trainer"].astype(str).isin(trainers)]
-        hj=hj_src.groupby(hj_src["jockey"].astype(str))["_top3"].mean().to_dict() if len(hj_src) else {}
-        ht=ht_src.groupby(ht_src["trainer"].astype(str))["_top3"].mean().to_dict() if len(ht_src) else {}
-        hg=h.groupby(["course","surface","distance_bucket","gate"],dropna=False)["_top3"].mean().to_dict() if len(h) else {}
-        for _,r in eg.iterrows():
-            horse=str(r["horse_name"]); jockey=str(r["jockey"]); trainer=str(r["trainer"]); course=str(r["course"]); surface=str(r["surface"])
-            distance=r["distance"]; gate=r["gate"]; bucket=r["distance_bucket"]; pr=prev.get(horse)
-            prev_distance=float(pr["distance"]) if pr is not None and pd.notna(pr["distance"]) else np.nan
-            prev_bw=float(pr["body_weight"]) if pr is not None and pd.notna(pr["body_weight"]) else np.nan
-            prev_class=float(pr["race_class_score"]) if pr is not None and pd.notna(pr["race_class_score"]) else np.nan
-            prev_dt=pr["_dt"] if pr is not None else pd.NaT
-            supplied_diff=pd.to_numeric(pd.Series([r.get("body_weight_diff")]),errors="coerce").iloc[0]
-            d=r.to_dict(); d.update({
-                "prev_finish":float(pr["finish"]) if pr is not None and pd.notna(pr["finish"]) else np.nan,
-                "prev_margin":float(pr["margin"]) if pr is not None and pd.notna(pr["margin"]) else np.nan,
-                "prev_last3f_rank":float(pr["last3f_rank"]) if pr is not None and pd.notna(pr["last3f_rank"]) else np.nan,
-                "distance_change":float(distance-prev_distance) if pd.notna(prev_distance) else 0.0,
-                "days_since_last":float((dt-prev_dt).days) if pd.notna(dt) and pd.notna(prev_dt) else np.nan,
-                "body_weight_change_from_prev":float(r["body_weight"]-prev_bw) if pd.notna(prev_bw) and pd.notna(r["body_weight"]) else (float(supplied_diff) if pd.notna(supplied_diff) else 0.0),
-                "class_change":float(r["race_class_score"]-prev_class) if pd.notna(r["race_class_score"]) and pd.notna(prev_class) else 0.0,
-                "recent_avg_finish":recent_finish.get(horse,np.nan),"recent_top3_rate":recent_top3.get(horse,np.nan),"recent_avg_margin":recent_margin.get(horse,np.nan),"recent_avg_last3f_rank":recent_l3.get(horse,np.nan),"recent_avg_popularity":recent_pop.get(horse,np.nan),
-                "distance_top3_rate":hd.get((horse,distance),np.nan),"course_top3_rate":hc.get((horse,course),np.nan),"surface_top3_rate":hs.get((horse,surface),np.nan),"jockey_top3_rate":hj.get(jockey,np.nan),"trainer_top3_rate":ht.get(trainer,np.nan),"gate_condition_top3_rate":hg.get((course,surface,bucket,gate),np.nan),
-                "running_style_score":_style_score(r.get("running_style")),"implied_prob":1/float(r["odds"]) if pd.notna(r["odds"]) and float(r["odds"])>0 else np.nan,"log_odds":np.log(max(float(r["odds"]),1.01)) if pd.notna(r["odds"]) else np.nan
-            }); result.append(d)
-        fill={"recent_avg_finish":global_finish,"recent_top3_rate":global_top3,"recent_avg_margin":global_margin,"recent_avg_last3f_rank":global_l3,"recent_avg_popularity":global_pop,"distance_top3_rate":global_top3,"course_top3_rate":global_top3,"surface_top3_rate":global_top3,"jockey_top3_rate":global_top3,"trainer_top3_rate":global_top3,"gate_condition_top3_rate":global_top3}
-    out=pd.DataFrame(result).drop(columns=["_dt"],errors="ignore")
-    for c,v in fill.items(): out[c]=pd.to_numeric(out[c],errors="coerce").fillna(v)
-    return out
+    """Compatibility path. Cloud uses cloud_features.enrich_entries_cloud."""
+    hist=build_history_features(raw_history)
+    ent=normalize_columns(entries).copy()
+    missing=validate_entries(ent)
+    if missing: raise ValueError("出走表に必要な列がありません: "+", ".join(missing))
+    # Minimal compatibility: caller should prefer cloud feature store for production.
+    for c in [
+        "recent_avg_finish","recent_top3_rate","recent_avg_margin","recent_avg_last3f_rank","recent_avg_popularity",
+        "distance_top3_rate","course_top3_rate","surface_top3_rate","jockey_top3_rate","trainer_top3_rate",
+        "gate_condition_top3_rate","horse_going_top3_rate","jockey_course_top3_rate","jockey_surface_top3_rate",
+        "jockey_distance_top3_rate","jockey_going_top3_rate","jockey_trainer_top3_rate","trainer_course_top3_rate",
+        "trainer_surface_top3_rate","trainer_distance_top3_rate","prev_finish","prev_margin","prev_last3f_rank",
+        "distance_change","days_since_last","body_weight_change_from_prev","class_change","race_class_score",
+        "running_style_score"
+    ]:
+        if c not in ent: ent[c]=np.nan
+    ent["implied_prob"]=1/pd.to_numeric(ent.get("odds"),errors="coerce").replace(0,np.nan)
+    ent["log_odds"]=np.log(pd.to_numeric(ent.get("odds"),errors="coerce").clip(lower=1.01))
+    return _add_race_relative_features(ent)
