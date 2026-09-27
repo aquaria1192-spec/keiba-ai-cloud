@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - feature/remove-bets-answer-rates
   workflow_dispatch:
     inputs:
       mode:
