@@ -276,11 +276,6 @@ def default_race_date():
 st.title("🏇 競馬予想AI Cloud Ver.1.12")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
-if online_adapter is not None:
-    st.caption(f"自動学習補正：**{champion_version(online_adapter)}**")
-else:
-    st.caption("自動学習補正：基準モデル（新規200レース以上の検証データを蓄積中）")
-
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -298,6 +293,12 @@ try:
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
+
+st.caption("確率校正：2024 proxy-yearで固定・2025 proxy-yearホールドアウトで再検証済み")
+if online_adapter is not None:
+    st.caption(f"自動学習補正：**{champion_version(online_adapter)}**")
+else:
+    st.caption("自動学習補正：base-1.12-calibrated（新規200レース以上のtrue-dateデータを蓄積中）")
 
 history_backend=HistoryBackend(st.secrets)
 with st.expander("📊 予想履歴の保存先",expanded=False):
