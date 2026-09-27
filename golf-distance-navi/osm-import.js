@@ -65,6 +65,22 @@ function indexToPlace(x){
     names:names
   };
 }
+function hydrateStoredCourseCenters(list){
+  var courses=read("gdn_courses",[]),changed=false;
+  if(!Array.isArray(courses)||!Array.isArray(list))return;
+  courses.forEach(function(c){
+    if(!c||!c.name)return;
+    c.source=c.source||{};
+    var cc=c.source.courseCenter;
+    if(cc&&Number.isFinite(Number(cc.lat))&&Number.isFinite(Number(cc.lng)))return;
+    var hit=list.find(function(p){return norm(p.name)===norm(c.name)&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon))});
+    if(hit){
+      c.source.courseCenter={lat:Number(hit.lat),lng:Number(hit.lon)};
+      changed=true;
+    }
+  });
+  if(changed)write("gdn_courses",courses);
+}
 function normalizeIndex(payload){
   var arr=Array.isArray(payload)?payload:(payload&&Array.isArray(payload.courses)?payload.courses:[]);
   var byName=new Map();
@@ -407,6 +423,7 @@ function init(){
   $("osmImport").addEventListener("click",importSelected);
   msg("ゴルフ場一覧を読み込んでいます…","");
   loadIndex().then(function(list){
+    hydrateStoredCourseCenters(list);
     msg("高速検索準備完了（"+list.length+"コース）。名称の一部を入力してください。","okmsg");
   });
 }
