@@ -82,13 +82,12 @@
       </div>
       <div class="grid" style="margin-top:12px"><button id="fitGreen" class="btn2" style="margin:0">グリーンを表示</button><button id="clearHole" class="btn2" style="margin:0">このホールを消去</button></div>
       <div class="gmapSetup">
-        <h2 style="margin-top:0">Google Maps 登録</h2>
-        <p class="help">Google Mapsの航空写真上でグリーン中央をタップし、1H→18Hを連続登録できます。APIキーはこの端末内だけに保存します。</p>
-        <div class="field"><label for="googleMapsKey">Google Maps APIキー</label><input id="googleMapsKey" type="password" autocomplete="off" placeholder="AIza..."></div>
-        <div class="grid"><button id="saveGoogleMapsKey" class="btn2" style="margin:0">APIキー保存</button><button id="openGoogleRegister" class="btn">Google Mapsで18H登録</button></div>
-        <div class="sourceNote">Google Cloudで Maps JavaScript API を有効化し、APIキーのHTTPリファラーを <b>https://aquaria1192-spec.github.io/*</b> に制限してください。</div>
+        <h2 style="margin-top:0">無料航空写真で登録</h2>
+        <p class="help">国土地理院の航空写真を使い、グリーン中央を1H→18Hと連続タップ登録できます。APIキー・課金設定は不要です。</p>
+        <button id="openGsiRegister" class="btn">航空写真で18H登録</button>
+        <div class="sourceNote">航空写真：国土地理院「全国最新写真（シームレス）」を利用。出典：国土地理院。</div>
       </div>
-      <button id="deleteCourse" class="btn2 danger">このコースを削除</button>
+            <button id="deleteCourse" class="btn2 danger">このコースを削除</button>
     </div>
   </div>
   <div class="panel">
@@ -118,12 +117,13 @@
 </section>
 </main>
 
-<div id="gmapModal" class="gmapModal hidden">
-  <div class="gmapHead"><strong id="gmapTitle">Google Maps 18H登録</strong><button id="closeGmap" class="gmapClose">閉じる</button></div>
-  <div id="gmapStatus" class="gmapStatus">航空写真を読み込みます</div>
-  <div id="googleMap" class="gmapCanvas"></div>
-  <div class="gmapFoot"><button id="gmapPrev" class="mini">‹</button><button id="gmapHole" class="btn">1H：グリーン中央をタップ</button><button id="gmapNext" class="mini">›</button></div>
+<div id="gsiModal" class="gmapModal hidden">
+  <div class="gmapHead"><strong id="gsiTitle">無料航空写真 18H登録</strong><button id="closeGsi" class="gmapClose">閉じる</button></div>
+  <div id="gsiStatus" class="gmapStatus">航空写真を読み込みます</div>
+  <div id="gsiMap" class="gmapCanvas"></div>
+  <div class="gmapFoot"><button id="gsiPrev" class="mini">‹</button><button id="gsiHole" class="btn">1H：グリーン中央をタップ</button><button id="gsiNext" class="mini">›</button></div>
 </div>
+
 
 <nav class="nav">
 <button class="active" data-s="course"><span>⛳</span>コース</button>
@@ -389,6 +389,6 @@ setTimeout(startGps,350);
 })();
 </script>
 <script src="./osm-import.js"></script>
-<script src="./google-map-register.js"></script>
+<script src="./gsi-map-register.js"></script>
 </body>
 </html>
