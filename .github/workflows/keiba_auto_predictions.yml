@@ -1,6 +1,9 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
+  push:
+    branches:
+      - feature/ver-1.12-online-learning
   workflow_dispatch:
     inputs:
       mode:
@@ -52,7 +55,10 @@ jobs:
         run: |
           python -m py_compile automation_runner.py online_learning.py streamlit_app.py
           python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
           from race_day_context import _race_no_int_safe
+          from model_compare import _calibrate_histgb_probabilities
           import automation_runner
           import online_learning
 
@@ -60,6 +66,20 @@ jobs:
           assert _race_no_int_safe("01R") == 1
           assert _race_no_int_safe(1) == 1
           assert online_learning.MIN_NEW_RACES >= 200
+          assert online_learning.BASE_CHAMPION_VERSION == "base-1.12-calibrated"
+
+          p1,p3=_calibrate_histgb_probabilities(
+              pd.Series([0.60,0.30,0.10]),
+              pd.Series([0.80,0.60,0.40]),
+          )
+          assert abs(float(p1.sum())-1.0) < 1e-9
+          assert ((p1>=0)&(p1<=1)).all()
+          assert ((p3>=p1)&(p3<=1)).all()
+
+          app=Path("streamlit_app.py").read_text(encoding="utf-8")
+          assert app.index("online_adapter=load_online_adapter()") < app.index(
+              "if online_adapter is not None:"
+          )
           print("Regression smoke checks OK")
           PY
 
