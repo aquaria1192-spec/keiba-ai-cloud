@@ -1,25 +1,21 @@
-# Cloud Ver.1.8 更新手順
+# Cloud Ver.1.8.1 更新手順
 
-GitHubの `keiba-ai-cloud` main ブランチへ差し替えてください。
+GitHub `keiba-ai-cloud` の main ブランチへ、差し替え用ZIPの内容を上書きしてください。
 
-更新ファイル:
-- streamlit_app.py
+更新:
 - race_day_context.py
-- cloud_features.py
+- cloud_data_builder.py
+- streamlit_app.py
 - automation_runner.py
 - README.md
 - CLOUD_DEPLOY手順.md
-- data/cloud_feature_store.joblib
 
-`cloud_feature_store.joblib` は騎手の条件別成績を追加しているため、必ず更新してください。
+`data/cloud_feature_store.joblib` はVer.1.8で更新済みなら再アップロード不要です。
 
-既存の以下はそのまま利用できます。
-- prediction-history ブランチ
-- GitHub Actions設定
-- payout_tools.py
-- evaluation_store.py
-- cloud_model.joblib
+Commit changes 後、
+1. Streamlitアプリを開く
+2. 「最新データに更新」を押す
+3. 「当日コンディション」を開く
+4. 「JRA公式当日出馬表から現在の馬場・天候を取得できています。」を確認
 
-更新後、Streamlitで「最新データに更新」を押してください。
-当日コンディション欄にJRA天候と芝/ダート馬場が表示され、
-予想表には騎手過去3着内率・騎手補正が表示されます。
+取得に失敗した場合は「馬場取得診断」に具体的な理由が表示されます。

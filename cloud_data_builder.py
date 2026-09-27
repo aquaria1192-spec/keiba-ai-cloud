@@ -8,7 +8,7 @@ from auto_data_builder import (
     expected_race_ids, unsupported_race_ids,
     VENUE_CODE, ENTRY_COLS, AutoDataError,
 )
-from race_day_context import collect_official_entry_urls
+from race_day_context import collect_official_entry_urls, _decode_jra_response
 
 def fetch_entries_cloud(target_date: date, request_interval=0.35):
     s = _session()
@@ -48,7 +48,7 @@ def fetch_entries_cloud(target_date: date, request_interval=0.35):
             try:
                 rr=s.get(url,timeout=20)
                 rr.raise_for_status()
-                f=parse_jra_official_html(rr.text,rid,target_date)
+                f=parse_jra_official_html(_decode_jra_response(rr),rid,target_date)
                 if f is not None and len(f):
                     frames.append(f)
                     got.add(rid)

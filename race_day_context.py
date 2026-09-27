@@ -68,6 +68,59 @@ WEATHER_CODES = {
 def _clean(v):
     return re.sub(r"\s+", " ", str(v).replace("\u3000"," ")).strip()
 
+def _decode_jra_response(response):
+    """
+    JRA pages may arrive without a reliable charset in the HTTP header.
+    requests.Response.text can therefore mojibake Japanese labels such as
+    天候 / 芝 / 稍重. Decode raw bytes with several candidates and select the
+    version that best preserves known JRA Japanese terms.
+    """
+    raw=getattr(response,"content",b"") or b""
+    text_hint=getattr(response,"text","") or ""
+
+    candidates=[]
+    seen=set()
+    encs=[
+        getattr(response,"encoding",None),
+        getattr(response,"apparent_encoding",None),
+        "cp932","shift_jis","utf-8","utf-8-sig",
+    ]
+    for enc in encs:
+        if not enc:
+            continue
+        key=str(enc).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if raw:
+                candidates.append((key,raw.decode(enc,errors="replace")))
+        except Exception:
+            pass
+    if text_hint:
+        candidates.append(("response.text",text_hint))
+    if not candidates:
+        return ""
+
+    keywords={
+        "出馬表":8,"天候":8,"競馬場":6,"発走時刻":6,
+        "中山":5,"阪神":5,"芝":3,"ダート":3,
+        "稍重":7,"不良":5,"良":2,"重":2,
+        "馬場状態":7,"含水率":5,"クッション":5,
+    }
+    def score(txt):
+        s=sum(txt.count(k)*w for k,w in keywords.items())
+        s-=txt.count("�")*4
+        s-=txt.count("譁")*2
+        s-=txt.count("陦")*2
+        return s
+    return max(candidates,key=lambda x:score(x[1]))[1]
+
+def _get_jra_html(session,url,timeout=20):
+    r=session.get(url,timeout=timeout)
+    r.raise_for_status()
+    return _decode_jra_response(r),r
+
 def _number(v):
     m = re.search(r"[-+]?\d+(?:\.\d+)?", str(v))
     return float(m.group()) if m else np.nan
@@ -195,9 +248,11 @@ def parse_jra_baba_html(html: str, source_url="") -> dict:
 
 
 def _parse_going_token(text, surface):
-    # JRA is normally UTF-8, but a few intermediate decoders can render 稍重
-    # as a replacement-character sequence. Treat that specific pattern as 稍重.
-    m=re.search(surface+r"\s*(不良|稍重|良|重|�.?重)",text)
+    # Accept both "芝稍重" and "芝：稍重", plus known mojibake fallback.
+    m=re.search(
+        re.escape(surface)+r"\s*[:：]?\s*(不良|稍重|良|重|�.?重)",
+        str(text)
+    )
     if not m:
         return ""
     v=m.group(1)
@@ -226,7 +281,7 @@ def parse_jra_entry_condition_html(html: str, source_url="") -> dict:
     race_no=int(rm.group(1)) if rm else None
     tm=re.search(r"発走時刻[:：]?\s*(\d{1,2})時(\d{2})分",head)
     post_time=f"{int(tm.group(1)):02d}:{int(tm.group(2)):02d}" if tm else ""
-    wm=re.search(r"天候\s*([^\s]+)",head)
+    wm=re.search(r"天候\s*[:：]?\s*(晴|曇|雨|小雨|雪|小雪)",head)
     weather=wm.group(1) if wm else ""
     turf=_parse_going_token(head,"芝")
     dirt=_parse_going_token(head,"ダート")
@@ -238,47 +293,117 @@ def parse_jra_entry_condition_html(html: str, source_url="") -> dict:
     }
 
 def fetch_jra_live_entry_contexts(target_date: date, courses=None, entry_url_map=None, session=None) -> dict:
-    """Get current JRA weather/going from race cards; more current than weekly baba text."""
+    """
+    Get live weather/going from JRA official race-card headers.
+
+    Robustness:
+    - use any already-discovered official race URLs;
+    - also use a known same-day seed directly, so URL collection failure does
+      not prevent current going/weather acquisition;
+    - decode JRA bytes explicitly (CP932/Shift-JIS/UTF-8 scoring).
+    """
     s=session or _session()
-    wanted=set(courses or [])
+    wanted=set(str(x) for x in (courses or []) if str(x))
     urls=dict(entry_url_map or {})
+    errors=[]
+
     if not urls:
-        urls=collect_official_entry_urls(target_date,courses,s)
+        try:
+            urls=collect_official_entry_urls(target_date,courses,s)
+        except Exception as e:
+            errors.append(f"公式URL一覧={e}")
+            urls={}
+
     by_course={}
     for rid,url in urls.items():
         course=VENUE_CODE.get(str(rid)[4:6],"")
         if not course or (wanted and course not in wanted):
             continue
-        by_course.setdefault(course,[]).append((int(str(rid)[-2:]),url))
+        try:
+            rn=int(str(rid)[-2:])
+        except Exception:
+            rn=0
+        by_course.setdefault(course,[]).append((rn,url,"公式URL一覧"))
+
+    # Critical fallback: a single official race card is enough to obtain the
+    # course-level live weather/going. Do not depend on collecting all 12 URLs.
+    seed_courses=wanted or {
+        VENUE_CODE.get(str(rid)[4:6],"") for rid in urls
+        if VENUE_CODE.get(str(rid)[4:6],"")
+    }
+    for course in seed_courses:
+        seed=OFFICIAL_ENTRY_SEEDS.get((target_date.isoformat(),course))
+        if seed:
+            existing={u for _,u,_ in by_course.get(course,[])}
+            if seed not in existing:
+                by_course.setdefault(course,[]).append((99,seed,"当日公式シード"))
 
     out={}
-    for course,items in by_course.items():
-        # Later races are often the most useful source after conditions update.
-        items=sorted(items,reverse=True)
+    for course in sorted(seed_courses):
+        items=by_course.get(course,[])
         merged={
             "course":course,"race_date":"","jra_weather":"",
             "turf_going":"","dirt_going":"","source_urls":[],
+            "live_condition_ok":False,"condition_errors":[],
         }
-        for _,url in items:
-            try:
-                r=s.get(url,timeout=20); r.raise_for_status()
-                q=parse_jra_entry_condition_html(r.text,url)
-                if q.get("race_date") and q.get("race_date")!=target_date.isoformat():
-                    continue
-                if q.get("race_date"): merged["race_date"]=q["race_date"]
-                if q.get("jra_weather"): merged["jra_weather"]=q["jra_weather"]
-                if q.get("turf_going"): merged["turf_going"]=q["turf_going"]
-                if q.get("dirt_going"): merged["dirt_going"]=q["dirt_going"]
-                merged["source_urls"].append(url)
-                if merged["turf_going"] and merged["dirt_going"] and merged["jra_weather"]:
-                    break
-            except Exception:
-                continue
-        if merged["turf_going"] or merged["dirt_going"] or merged["jra_weather"]:
-            merged["is_target_date"]=(merged.get("race_date")==target_date.isoformat())
+        if not items:
+            merged["condition_errors"].append("JRA公式出馬表URLを取得できません")
             out[course]=merged
-    return out
+            continue
 
+        # Prefer direct seed / later race because its header reflects current
+        # course conditions and requires only one successful page.
+        items=sorted(items,key=lambda x:x[0],reverse=True)
+        for _,url,source_kind in items:
+            try:
+                html,_=_get_jra_html(s,url,timeout=20)
+                q=parse_jra_entry_condition_html(html,url)
+                if q.get("race_date") and q.get("race_date")!=target_date.isoformat():
+                    merged["condition_errors"].append(
+                        f"{source_kind}: 日付不一致 {q.get('race_date')}"
+                    )
+                    continue
+
+                if q.get("race_date"):
+                    merged["race_date"]=q["race_date"]
+                if q.get("jra_weather"):
+                    merged["jra_weather"]=q["jra_weather"]
+                if q.get("turf_going"):
+                    merged["turf_going"]=q["turf_going"]
+                if q.get("dirt_going"):
+                    merged["dirt_going"]=q["dirt_going"]
+                merged["source_urls"].append(url)
+
+                if (
+                    q.get("jra_weather") or
+                    q.get("turf_going") or
+                    q.get("dirt_going")
+                ):
+                    merged["live_condition_ok"]=True
+
+                # One current-condition value is already useful; keep trying
+                # only if both surfaces/weather are still blank.
+                if (
+                    merged["jra_weather"] and
+                    (merged["turf_going"] or merged["dirt_going"])
+                ):
+                    break
+            except Exception as e:
+                merged["condition_errors"].append(
+                    f"{source_kind}: {type(e).__name__}: {e}"
+                )
+
+        merged["is_target_date"]=(
+            merged.get("race_date")==target_date.isoformat()
+        )
+        out[course]=merged
+
+    # Preserve discovery-level errors in each requested course for UI diagnosis.
+    if errors:
+        for course in seed_courses:
+            out.setdefault(course,{"course":course})
+            out[course].setdefault("condition_errors",[]).extend(errors)
+    return out
 def merge_entry_conditions(contexts: dict, entries: pd.DataFrame) -> dict:
     """Fallback: expose the going already present in acquired race-card rows."""
     out={k:dict(v) for k,v in (contexts or {}).items()}
@@ -307,9 +432,8 @@ def fetch_jra_baba_contexts(target_date: date, courses=None, session=None) -> di
     out = {}
     for url in JRA_BABA_URLS:
         try:
-            r=s.get(url,timeout=15)
-            r.raise_for_status()
-            ctx=parse_jra_baba_html(r.text,url)
+            html,_=_get_jra_html(s,url,timeout=15)
+            ctx=parse_jra_baba_html(html,url)
             course=ctx.get("course","")
             if not course:
                 continue
@@ -394,6 +518,8 @@ def fetch_day_contexts(target_date: date, courses, entry_url_map=None) -> dict:
             ctx["live_race_date"]=lv["race_date"]
         if lv.get("source_urls"):
             ctx["live_source_urls"]=lv["source_urls"]
+        ctx["live_condition_ok"]=bool(lv.get("live_condition_ok"))
+        ctx["condition_errors"]=list(lv.get("condition_errors") or [])
         ctx["is_target_date"]=bool(
             lv.get("is_target_date") or ctx.get("race_date")==target_date.isoformat()
         )
@@ -445,9 +571,8 @@ def collect_official_entry_urls(target_date: date, courses=None, session=None) -
         if not seed:
             continue
         try:
-            r=s.get(seed,timeout=20)
-            r.raise_for_status()
-            soup=BeautifulSoup(r.text,"lxml")
+            html,_=_get_jra_html(s,seed,timeout=20)
+            soup=BeautifulSoup(html,"lxml")
             urls=[urljoin(seed,a["href"]) for a in soup.find_all("a",href=True)]
             urls.append(seed)
             pairs=[(u,unquote(u)) for u in dict.fromkeys(urls)]
@@ -468,9 +593,8 @@ def _result_url_from_entry(entry_url: str, session):
     so match by both href and text instead of exact-text equality only.
     """
     try:
-        r=session.get(entry_url,timeout=20)
-        r.raise_for_status()
-        soup=BeautifulSoup(r.text,"lxml")
+        html,_=_get_jra_html(session,entry_url,timeout=20)
+        soup=BeautifulSoup(html,"lxml")
 
         candidates=[]
         for a in soup.find_all("a",href=True):

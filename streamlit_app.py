@@ -30,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.8",
+    page_title="競馬予想AI Cloud Ver.1.8.1",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -126,6 +126,16 @@ def show_day_context(contexts):
             if ctx.get("weather_source"): srcs.append("天候="+str(ctx.get("weather_source")))
             if srcs:
                 st.caption("取得元："+" / ".join(srcs))
+            if ctx.get("live_condition_ok"):
+                st.success("JRA公式当日出馬表から現在の馬場・天候を取得できています。")
+            else:
+                st.warning("JRA公式当日出馬表から現在値を取得できていません。下の取得診断を確認してください。")
+            if ctx.get("live_source_urls"):
+                st.caption("当日公式ページ："+str(ctx.get("live_source_urls")[0]))
+            if ctx.get("condition_errors"):
+                with st.expander("馬場取得診断"):
+                    for err in ctx.get("condition_errors")[-8:]:
+                        st.write("・"+str(err))
             st.write(
                 f"**JRA馬場情報ページ** {date_note}　"
                 f"含水率 芝：{nfmt(ctx.get('turf_goal'),'%')} / {nfmt(ctx.get('turf_corner'),'%')}　"
@@ -217,8 +227,8 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.8")
-st.caption("JRA当日馬場・騎手データ強化＋自動答え合わせ・回収率集計")
+st.title("🏇 競馬予想AI Cloud Ver.1.8.1")
+st.caption("JRA当日馬場取得修正＋騎手データ強化＋自動答え合わせ・回収率集計")
 
 st.markdown("""
 <div class="hero">
@@ -643,7 +653,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.8の自己評価について"):
+with st.expander("Ver.1.8.1の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -653,7 +663,7 @@ with st.expander("Ver.1.8の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.8の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.8.1の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
