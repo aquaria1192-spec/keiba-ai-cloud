@@ -63,6 +63,7 @@ ID_COLS = [
     "raw_win_prob", "raw_top3_prob", "raw_ai_index",
     "base_win_prob", "base_top3_prob", "base_ai_index", "pred_rank", "pred_mark",
     "actual_finish", "actual_win", "actual_top3", "settled_at", "result_url",
+    "result_quality",
 ]
 LEARNING_COLS = list(dict.fromkeys(ID_COLS + FEATURE_COLS))
 
@@ -88,7 +89,7 @@ def normalize_learning_rows(df):
         "snapshot_id", "recorded_at", "champion_version", "snapshot_type",
         "date", "course", "race_no", "race_name", "surface", "going",
         "horse_name", "jockey", "trainer", "feature_source", "quality_flag",
-        "pred_mark", "settled_at", "result_url",
+        "pred_mark", "settled_at", "result_url", "result_quality",
     }
     for c in text_cols:
         out[c] = out[c].fillna("").astype(str)
@@ -194,6 +195,7 @@ def learning_rows_from_detail(detail, snapshot, current_champion_version):
     out["actual_top3"] = np.nan
     out["settled_at"] = ""
     out["result_url"] = ""
+    out["result_quality"] = ""
     return normalize_learning_rows(out)
 
 
@@ -207,15 +209,45 @@ def learning_snapshot_needs_result(rows, snapshot_id):
 
 
 def apply_learning_result(rows, snapshot_id, finish_map, result_url, settled_at):
+    """
+    Attach result labels only when the parsed result is complete enough for ML.
+
+    This prevents a partial HTML parse (for example only the first three
+    finishers) from turning every stored runner outside that fragment into an
+    unknown/biased sample.
+    """
     if rows is None or len(rows) == 0:
         return rows, False
     out = rows.copy()
     mask = out["snapshot_id"].astype(str) == str(snapshot_id)
     if not mask.any():
         return out, False
+
+    snap = out.loc[mask].copy()
+    predicted_n = int(pd.to_numeric(snap["horse_no"], errors="coerce").notna().sum())
+    finishes = sorted(int(v) for v in finish_map.values() if pd.notna(v))
+    matched_n = sum(
+        1 for v in pd.to_numeric(snap["horse_no"], errors="coerce")
+        if pd.notna(v) and int(v) in finish_map
+    )
+    minimum = max(5, int(np.ceil(predicted_n * 0.75)))
+    complete = (
+        predicted_n >= 5 and
+        matched_n >= minimum and
+        finishes.count(1) == 1 and
+        sum(1 for x in finishes if x <= 3) >= 3
+    )
+
+    quality = "complete" if complete else "incomplete_result"
+    out.loc[mask, "result_quality"] = quality
+    if not complete:
+        return normalize_learning_rows(out), True
+
     changed = False
     for idx in out.index[mask]:
-        no = pd.to_numeric(pd.Series([out.at[idx, "horse_no"]]), errors="coerce").iloc[0]
+        no = pd.to_numeric(
+            pd.Series([out.at[idx, "horse_no"]]), errors="coerce"
+        ).iloc[0]
         if pd.isna(no) or int(no) not in finish_map:
             continue
         fi = int(finish_map[int(no)])
@@ -378,6 +410,7 @@ def _canonical_settled_rows(rows):
     latest snapshot within the selected type.
     """
     q = normalize_learning_rows(rows)
+    q = q[q["result_quality"].astype(str) == "complete"].copy()
     q = q[pd.to_numeric(q["actual_finish"], errors="coerce").notna()].copy()
     q = q[pd.to_numeric(q["actual_win"], errors="coerce").notna()].copy()
     q = q[pd.to_numeric(q["actual_top3"], errors="coerce").notna()].copy()
