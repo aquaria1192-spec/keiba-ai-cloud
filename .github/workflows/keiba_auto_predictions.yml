@@ -75,6 +75,11 @@ jobs:
               if float(v)>0
           ]
           assert active == ["histgb"], f"unexpected active models: {active}"
+          safe_meta={
+              k:v for k,v in pkg.items()
+              if k not in {"trained_models"}
+          }
+          print("MODEL_PACKAGE_META",safe_meta)
 
           p1,p3=_calibrate_histgb_probabilities(
               pd.Series([0.60,0.30,0.10]),
