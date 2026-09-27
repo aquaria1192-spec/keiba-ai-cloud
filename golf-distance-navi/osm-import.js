@@ -3,7 +3,7 @@
 
 var NOMINATIM="https://nominatim.openstreetmap.org/search";
 var OVERPASS="https://overpass-api.de/api/interpreter";
-var CACHE_KEY="gdn_osm_search_cache_v3";
+var CACHE_KEY="gdn_osm_search_cache_v4";
 var LAST_KEY="gdn_osm_search_last_v1";
 var results=[];
 var selected=null;
@@ -189,37 +189,28 @@ async function overpassJson(query){
   var data=await resp.json();
   return Array.isArray(data.elements)?data.elements:[];
 }
-async function searchGolfByName(q){
+async function searchGolfHybrid(q){
   var pat=escapeRegex(q.trim()),rx=JSON.stringify(pat);
-  var query='[out:json][timeout:25];area["ISO3166-1"="JP"][admin_level=2]->.jp;('+
-    'nwr(area.jp)["leisure"="golf_course"]["name"~'+rx+',i];'+
-    'nwr(area.jp)["leisure"="golf_course"]["name:ja"~'+rx+',i];'+
-    'nwr(area.jp)["leisure"="golf_course"]["official_name"~'+rx+',i];'+
-    'nwr(area.jp)["leisure"="golf_course"]["alt_name"~'+rx+',i];'+
-    'nwr(area.jp)["leisure"="golf_course"]["operator"~'+rx+',i];'+
-    'relation(area.jp)["golf"="course"]["name"~'+rx+',i];'+
-    'relation(area.jp)["type"="golf"]["name"~'+rx+',i];'+
-  ');out tags center 40;';
-  var els=await overpassJson(query),m=new Map();
-  els.forEach(function(e){
-    var p=osmElementToPlace(e);if(!p)return;
-    if(e.tags&&(e.tags.golf==="course"||e.tags.type==="golf"))p.extratags.leisure="golf_course";
-    if(isGolfCourse(p))m.set(osmKey(p),p);
-  });
-  return Array.from(m.values());
-}
-async function geocodeRegion(q){
-  var last=Number(localStorage.getItem(LAST_KEY)||0),wait=1100-(Date.now()-last);
-  if(wait>0)await sleep(wait);
-  localStorage.setItem(LAST_KEY,String(Date.now()));
-  var url=NOMINATIM+"?format=jsonv2&limit=5&countrycodes=jp&layer=address&addressdetails=1&accept-language=ja&q="+encodeURIComponent(q);
-  var resp=await fetch(url,{headers:{"Accept":"application/json"}});
-  if(!resp.ok)throw new Error("地域検索 HTTP "+resp.status);
-  var raw=await resp.json();
-  return (Array.isArray(raw)?raw:[]).filter(function(p){return p.lat!=null&&p.lon!=null});
-}
-async function searchGolfNear(origin,radius){
-  var query='[out:json][timeout:25];nwr(around:'+radius+','+origin.lat+','+origin.lng+')["leisure"="golf_course"];out tags center 60;';
+  var query=
+    '[out:json][timeout:30];'+
+    'area["ISO3166-1"="JP"][admin_level=2]->.jp;'+
+    '('+
+      'nwr(area.jp)["leisure"="golf_course"]["name"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["name:ja"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["official_name"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["alt_name"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["operator"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["addr:city"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["addr:town"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["addr:village"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["addr:county"~'+rx+',i];'+
+      'nwr(area.jp)["leisure"="golf_course"]["addr:province"~'+rx+',i];'+
+    ')->.direct;'+
+    'rel(area.jp)["boundary"="administrative"]["name"~'+rx+',i]->.adminrels;'+
+    '.adminrels map_to_area -> .adminareas;'+
+    'nwr(area.adminareas)["leisure"="golf_course"]->.regional;'+
+    '(.direct;.regional;);'+
+    'out tags center 100;';
   var els=await overpassJson(query),m=new Map();
   els.forEach(function(e){
     var p=osmElementToPlace(e);
@@ -227,7 +218,13 @@ async function searchGolfNear(origin,radius){
   });
   return Array.from(m.values());
 }
-
+function directMatchScore(p,q){
+  var text=norm(resultNames(p)),addr=norm(p.display_name||""),nq=norm(q);
+  var score=0;
+  if(text.indexOf(nq)>=0)score+=30;
+  if(addr.indexOf(nq)>=0)score+=18;
+  return score;
+}
 function resultLabel(p){
   var name=(p.name||String(p.display_name||"").split(",")[0]||"名称不明").trim();
   var parts=String(p.display_name||"").split(",").map(function(x){return x.trim()}).filter(Boolean);
@@ -261,32 +258,19 @@ async function search(){
   var q=$("osmQuery").value.trim();
   if(q.length<2){msg("名称や地域名を2文字以上入力してください。","errmsg");return}
   $("osmSearch").disabled=true;$("osmImport").disabled=true;selected=null;results=[];renderResults();
-  msg("ゴルフ場名の部分一致を検索しています…","");
+  msg("「"+q+"」に関するゴルフ場を検索しています…","");
   try{
-    var cache=read(CACHE_KEY,{}),key=("hybrid:"+q).toLowerCase(),cached=cache[key];
+    var cache=read(CACHE_KEY,{}),key=("area:"+q).toLowerCase(),cached=cache[key];
     if(cached&&Date.now()-cached.time<1000*60*60*24*30){
       results=(cached.results||[]).filter(isGolfCourse);renderResults();
       msg(results.length?"端末に保存したゴルフ場候補を表示しています。":"一致するゴルフ場はありませんでした。",results.length?"okmsg":"errmsg");
       return;
     }
 
-    var direct=[];
-    try{direct=await searchGolfByName(q)}catch(nameErr){console.warn(nameErr)}
-    direct=direct.sort(function(x,y){return scoreResult(y,q)-scoreResult(x,q)});
-
-    var nearby=[],origin=null,regions=[];
-    try{regions=await geocodeRegion(q)}catch(regionErr){console.warn(regionErr)}
-    if(regions.length){
-      origin={lat:+regions[0].lat,lng:+regions[0].lon};
-      try{nearby=await searchGolfNear(origin,30000)}catch(nearErr){console.warn(nearErr)}
-      nearby=nearby.sort(function(x,y){return scoreResult(y,q,origin)-scoreResult(x,q,origin)});
-    }
-
-    var merged=new Map();
-    direct.concat(nearby).forEach(function(p){
-      if(isGolfCourse(p)&&!merged.has(osmKey(p)))merged.set(osmKey(p),p);
-    });
-    results=Array.from(merged.values()).sort(function(x,y){return scoreResult(y,q,origin)-scoreResult(x,q,origin)}).slice(0,20);
+    results=await searchGolfHybrid(q);
+    results=results.filter(isGolfCourse).sort(function(a,b){
+      return (directMatchScore(b,q)+scoreResult(b,q))-(directMatchScore(a,q)+scoreResult(a,q));
+    }).slice(0,30);
 
     cache[key]={time:Date.now(),results:results};
     var keys=Object.keys(cache).sort(function(x,y){return cache[y].time-cache[x].time}).slice(0,30),small={};
@@ -294,9 +278,9 @@ async function search(){
     renderResults();
 
     if(results.length){
-      msg((direct.length?direct.length+"件の名称部分一致":"名称部分一致は0件")+(origin?"／地域周辺も検索済み":"")+"。合計"+results.length+"件のゴルフ場候補です。","okmsg");
+      msg("名称・住所・行政区域から"+results.length+"件のゴルフ場候補が見つかりました。","okmsg");
     }else{
-      msg("ゴルフ場候補が見つかりませんでした。名称の一部、漢字・カタカナ表記、市町村名などを変えてお試しください。","errmsg");
+      msg("ゴルフ場候補が見つかりませんでした。別表記や近隣市町村名もお試しください。","errmsg");
     }
   }catch(e){
     msg("検索できませんでした："+e.message,"errmsg");
@@ -304,7 +288,6 @@ async function search(){
     $("osmSearch").disabled=false;
   }
 }
-
 async function importSelected(){
   if(!selected)return;
   $("osmImport").disabled=true;$("osmSearch").disabled=true;
@@ -341,7 +324,7 @@ function init(){
   $("osmSearch").addEventListener("click",search);
   $("osmQuery").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();search()}});
   $("osmImport").addEventListener("click",importSelected);
-  msg("名称の一部を直接検索し、同じ文字を地域名としても検索します。例：矢板、那須、メイフラワー","");
+  msg("名称の一部・住所・市町村名で検索できます。例：「矢板」で矢板市内のゴルフ場も表示します。","");
 }
 
 init();
