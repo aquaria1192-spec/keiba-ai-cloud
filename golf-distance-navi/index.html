@@ -27,6 +27,7 @@
 .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:900;width:min(760px,100%);display:grid;grid-template-columns:repeat(5,1fr);background:#fffffff2;border-top:1px solid var(--line);padding:7px 4px calc(7px + var(--bottom));backdrop-filter:blur(12px)}.nav button{border:0;background:transparent;color:#67756d;min-height:54px;font-size:10px;font-weight:800;display:grid;justify-items:center;align-content:center;gap:2px;border-radius:12px}.nav button span{font-size:19px}.nav button.active{color:var(--g);background:#e9f3ed}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}.dot{width:18px;height:18px;border-radius:50%;background:#1576d4;border:3px solid #fff;box-shadow:0 0 0 2px #1576d44d}.gmark{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:900;border:2px solid #fff;box-shadow:0 1px 5px #0007}.gf{background:#348a57}.gc{background:#0f5132}.gb{background:#123a29}
 .hidden{display:none!important}
+.gmapSetup{margin-top:14px;padding-top:14px;border-top:1px solid #edf0ee}.gmapModal{position:fixed;inset:0;z-index:5000;background:#fff;display:grid;grid-template-rows:auto auto 1fr auto}.gmapHead{padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:#0f5132;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px}.gmapHead strong{font-size:16px}.gmapStatus{padding:9px 12px;background:#f2f7f4;border-bottom:1px solid #d8e6dd;font-size:13px;font-weight:800}.gmapCanvas{min-height:0}.gmapFoot{display:grid;grid-template-columns:64px 1fr 64px;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid #ddd;background:#fff}.gmapFoot button{min-height:46px}.gmapClose{border:0;background:#ffffff22;color:#fff;border-radius:10px;padding:8px 12px;font-weight:800}
 .osmresults{display:grid;gap:8px;margin-top:10px}.osmrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px;border:1px solid #e1e7e3;border-radius:12px;background:#fff}.osmrow.selected{border-color:#6fa386;background:#f0f7f3}.osmmsg{margin-top:10px}.osmmsg.okmsg{background:#eef7f1;border-color:#cfe5d6;color:#174d31}.osmmsg.errmsg{background:#fff0f0;border-color:#efcdcd;color:#8d2020}.sourceNote{font-size:11px;line-height:1.5;color:var(--muted);margin-top:10px}
 @media(max-width:380px){.big .n{font-size:48px}.greenBox .val{font-size:22px}.grid3{grid-template-columns:1fr}.nav button{font-size:9px}}
 </style>
@@ -80,6 +81,13 @@
         <div class="pointRow"><div class="pointName">奥</div><div id="backStatus" class="pointVal">未登録</div><button class="mini setPoint" data-point="back">地図で設定</button></div>
       </div>
       <div class="grid" style="margin-top:12px"><button id="fitGreen" class="btn2" style="margin:0">グリーンを表示</button><button id="clearHole" class="btn2" style="margin:0">このホールを消去</button></div>
+      <div class="gmapSetup">
+        <h2 style="margin-top:0">Google Maps 登録</h2>
+        <p class="help">Google Mapsの航空写真上でグリーン中央をタップし、1H→18Hを連続登録できます。APIキーはこの端末内だけに保存します。</p>
+        <div class="field"><label for="googleMapsKey">Google Maps APIキー</label><input id="googleMapsKey" type="password" autocomplete="off" placeholder="AIza..."></div>
+        <div class="grid"><button id="saveGoogleMapsKey" class="btn2" style="margin:0">APIキー保存</button><button id="openGoogleRegister" class="btn">Google Mapsで18H登録</button></div>
+        <div class="sourceNote">Google Cloudで Maps JavaScript API を有効化し、APIキーのHTTPリファラーを <b>https://aquaria1192-spec.github.io/*</b> に制限してください。</div>
+      </div>
       <button id="deleteCourse" class="btn2 danger">このコースを削除</button>
     </div>
   </div>
@@ -109,6 +117,13 @@
   <div class="panel"><h2>端末状態</h2><div id="env" class="help"></div></div>
 </section>
 </main>
+
+<div id="gmapModal" class="gmapModal hidden">
+  <div class="gmapHead"><strong id="gmapTitle">Google Maps 18H登録</strong><button id="closeGmap" class="gmapClose">閉じる</button></div>
+  <div id="gmapStatus" class="gmapStatus">航空写真を読み込みます</div>
+  <div id="googleMap" class="gmapCanvas"></div>
+  <div class="gmapFoot"><button id="gmapPrev" class="mini">‹</button><button id="gmapHole" class="btn">1H：グリーン中央をタップ</button><button id="gmapNext" class="mini">›</button></div>
+</div>
 
 <nav class="nav">
 <button class="active" data-s="course"><span>⛳</span>コース</button>
@@ -374,5 +389,6 @@ setTimeout(startGps,350);
 })();
 </script>
 <script src="./osm-import.js"></script>
+<script src="./google-map-register.js"></script>
 </body>
 </html>
