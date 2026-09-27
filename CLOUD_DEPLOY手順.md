@@ -1,20 +1,24 @@
-# Cloud Ver.1.8.2 更新手順
+# Cloud Ver.1.9 更新手順
 
 GitHub `keiba-ai-cloud` の main ブランチへ以下を上書きしてください。
 
-- auto_data_builder.py
-- race_day_context.py
 - streamlit_app.py
-- automation_runner.py
 - README.md
 - CLOUD_DEPLOY手順.md
 
-Commit changes 後、
-1. Streamlitアプリを開く
-2. 必要なら Manage app → Reboot app
-3. 「最新データに更新」を押す
-4. 「当日コンディション」を開く
+その他のVer.1.8.2ファイルはそのまま使用できます。
 
-JRA直接取得ができなくても、
-「同日の公開出馬表から現在の馬場・天候を取得できています。」
-と表示され、芝・ダートに現在値が出れば正常です。
+## 更新後
+
+1. Commit changes
+2. Streamlitが自動更新
+3. 必要なら Manage app → Reboot app
+4. 「最新データに更新」
+5. 開催地を選択
+
+中山を選択した場合は、
+「中山競馬場の全レースを一括予想しています…」
+と表示されたあと、全レース一覧が表示されます。
+
+一覧の下の「詳細を見るレース」を変更すると、
+選択したレースの全頭予想・買い目へ切り替わります。

@@ -30,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.8.2",
+    page_title="競馬予想AI Cloud Ver.1.9",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -242,14 +242,14 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.8.2")
-st.caption("当日馬場3段階取得＋騎手データ強化＋自動答え合わせ・回収率集計")
+st.title("🏇 競馬予想AI Cloud Ver.1.9")
+st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
 
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
 ① 当日の出走表・馬場・天気を更新<br>
-② 開催地 → レースを選んで全頭予想<br>
+② 開催地を選ぶと、その開催地の全レースを一括予想<br>
 ③ 予想スナップショットを自動記録<br>
 ④ レース終了後に結果と照合<br>
 ⑤ 精度・得意条件をダッシュボードへ蓄積
@@ -317,6 +317,11 @@ with st.container(border=True):
             st.session_state["cloud_features"]=features
             st.session_state["cloud_info"]=info
             st.session_state["cloud_contexts"]=contexts
+
+            # 当日データを取り直したら、開催地一括予想も必ず作り直す。
+            st.session_state["cloud_course_prediction_cache"]={}
+            st.session_state.pop("_saved_fp_19",None)
+
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
             st.error(f"当日データを取得できませんでした：{e}")
@@ -348,68 +353,257 @@ if features is not None and len(features):
     date_iso=str(st.session_state.get("cloud_info",{}).get("date",""))
     day=features[features["date"]==date_iso].copy()
 
-    with st.container(border=True):
-        st.markdown('<div class="step">② 開催地 → レースを選んで予想</div>',unsafe_allow_html=True)
-        courses=sorted(day["course"].dropna().unique())
-        course=st.selectbox("① 開催地を選択",courses,key="cloud_course")
-        cdf=day[day["course"]==course].copy()
-        races=sorted(cdf["race_no"].dropna().unique(),key=race_num)
+
+with st.container(border=True):
+    st.markdown(
+        '<div class="step">② 開催地ごとに全レースを一括予想</div>',
+        unsafe_allow_html=True
+    )
+
+    courses=sorted(day["course"].dropna().unique())
+    course=st.selectbox(
+        "① 開催地を選択",
+        courses,
+        key="cloud_course"
+    )
+    cdf=day[day["course"]==course].copy()
+    races=sorted(
+        cdf["race_no"].dropna().unique(),
+        key=race_num
+    )
+
+    context=(st.session_state.get("cloud_contexts") or {}).get(course,{})
+    info=st.session_state.get("cloud_info") or {}
+    official=info.get("official_entry_urls") or {}
+
+    use_day_adjustment=st.toggle(
+        "当日馬場・バイアス補正を反映",
+        value=True,
+        help=(
+            "JRA公式・同日公開出馬表の当日馬場、"
+            "馬場適性、内外/脚質傾向、騎手の条件別成績と"
+            "当日騎乗成績を小幅補正します。"
+        ),
+        key="cloud_use_day_adjustment"
+    )
+
+    cache=st.session_state.setdefault(
+        "cloud_course_prediction_cache",{}
+    )
+    cache_key=(
+        str(date_iso),
+        str(course),
+        bool(use_day_adjustment),
+    )
+
+    if cache_key not in cache:
+        try:
+            with st.spinner(
+                f"{course}競馬場の全{len(races)}レースを一括予想しています…"
+            ):
+                # batch_predict_day は course/race_no 単位で内部処理するため、
+                # 開催地全体を1回渡せば全レースの基礎予想をまとめて計算できる。
+                base_detail,_=batch_predict_day(
+                    cdf,
+                    date_iso,
+                    model_pkg["trained_models"],
+                    model_pkg["weights"]
+                )
+
+                adjusted_parts=[]
+                bias_map={}
+                summary_rows=[]
+
+                for rno in races:
+                    race_key=str(rno)
+                    rdf=cdf[cdf["race_no"].astype(str)==race_key].copy()
+                    rd=base_detail[
+                        base_detail["レース"].astype(str)==race_key
+                    ].copy()
+                    if rd.empty:
+                        continue
+
+                    surface=str(rdf.iloc[0].get("surface","")) if len(rdf) else ""
+                    bias=fetch_bias_cached(
+                        date_iso,
+                        course,
+                        race_num(rno),
+                        surface,
+                        tuple(sorted(official.items()))
+                    )
+                    rd=apply_day_adjustments(
+                        rd,
+                        context,
+                        bias,
+                        enabled=use_day_adjustment
+                    )
+                    adjusted_parts.append(rd)
+                    bias_map[race_key]=bias
+
+                    rg=rd.sort_values("順位").copy()
+                    top=rg.iloc[0]
+                    second=rg.iloc[1] if len(rg)>=2 else None
+                    gap=(
+                        float(top.get("ai_index",0))
+                        - float(second.get("ai_index",0))
+                        if second is not None else 0.0
+                    )
+                    race_name=str(rdf.iloc[0].get("race_name","")).strip() if len(rdf) else ""
+                    going=str(rg.iloc[0].get("going",""))
+                    summary_rows.append({
+                        "レース":race_key,
+                        "レース名":(
+                            race_name
+                            if race_name and race_name.lower()!="nan"
+                            else f"{surface} {int(float(rdf.iloc[0].get('distance',0) or 0))}m"
+                            if len(rdf) else ""
+                        ),
+                        "馬場":going,
+                        "◎馬番":top.get("horse_no",""),
+                        "◎本命馬":top.get("horse_name",""),
+                        "騎手":top.get("jockey",""),
+                        "勝率":top.get("win_prob",np.nan),
+                        "3着内率":top.get("top3_prob",np.nan),
+                        "AI指数":top.get("ai_index",np.nan),
+                        "単勝オッズ":top.get("odds",np.nan),
+                        "AI上位差":gap,
+                        "当日傾向":(bias or {}).get("summary","データなし"),
+                    })
+
+                all_detail=(
+                    pd.concat(adjusted_parts,ignore_index=True)
+                    if adjusted_parts else pd.DataFrame()
+                )
+                course_summary=pd.DataFrame(summary_rows)
+
+                cache[cache_key]={
+                    "detail":all_detail,
+                    "summary":course_summary,
+                    "bias_map":bias_map,
+                }
+                st.session_state[
+                    "cloud_course_prediction_cache"
+                ]=cache
+
+        except Exception as e:
+            st.error(
+                f"{course}競馬場の一括予想に失敗しました：{e}"
+            )
+
+    result=cache.get(cache_key)
+
+    if result and len(result.get("detail",pd.DataFrame())):
+        all_detail=result["detail"]
+        course_summary=result.get("summary",pd.DataFrame())
+        bias_map=result.get("bias_map",{})
+
+        st.success(
+            f"✅ {course}競馬場の{len(races)}レースを一括予想しました。"
+            " レースを切り替えても再計算しません。"
+        )
+
+        st.markdown("#### 全レース一括予想")
+        if len(course_summary):
+            sq=course_summary.copy()
+            for c in ["勝率","3着内率"]:
+                if c in sq:
+                    sq[c]=pd.to_numeric(
+                        sq[c],errors="coerce"
+                    ).map(pct)
+            for c in ["AI指数","単勝オッズ","AI上位差"]:
+                if c in sq:
+                    sq[c]=pd.to_numeric(
+                        sq[c],errors="coerce"
+                    ).round(2)
+
+            st.dataframe(
+                sq,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        st.markdown("#### レースを選択")
+        st.caption(
+            "ここでレースを選ぶと、下の詳細表示がそのレースへ即座に切り替わります。"
+            " AI予想そのものは開催地選択時に全レース計算済みです。"
+        )
+
         race=st.selectbox(
-            "② レースを選択",races,
+            "② 詳細を見るレース",
+            races,
             format_func=lambda x: race_label(x,cdf),
             key="cloud_race"
         )
-        rdf=cdf[cdf["race_no"]==race].copy()
-        surface=str(rdf.iloc[0].get("surface","")) if len(rdf) else ""
-        context=(st.session_state.get("cloud_contexts") or {}).get(course,{})
-        info=st.session_state.get("cloud_info") or {}
-        official=info.get("official_entry_urls") or {}
 
-        use_day_adjustment=st.toggle(
-            "当日馬場・バイアス補正を反映",
-            value=True,
-            help="JRA公式当日馬場をAIへ反映し、馬場適性・内外/脚質傾向・騎手の条件別成績と当日騎乗成績を小幅補正します。"
+        # 選択レースの詳細だけを下に表示する。
+        race_key=str(race)
+        detail=all_detail[
+            all_detail["レース"].astype(str)==race_key
+        ].copy()
+        bias=bias_map.get(race_key,{})
+        rdf=cdf[
+            cdf["race_no"].astype(str)==race_key
+        ].copy()
+
+        st.markdown(
+            '<div id="selected-race-detail"></div>',
+            unsafe_allow_html=True
         )
 
         try:
-            with st.spinner("選択レースを予想しています…"):
-                detail,_=batch_predict_day(
-                    rdf,date_iso,
-                    model_pkg["trained_models"],model_pkg["weights"]
-                )
-                bias=fetch_bias_cached(
-                    date_iso,course,race_num(race),surface,
-                    tuple(sorted(official.items()))
-                )
-                detail=apply_day_adjustments(
-                    detail,context,bias,enabled=use_day_adjustment
-                )
-            shown_plan,shown_meta=show_prediction(detail,context,bias)
+            shown_plan,shown_meta=show_prediction(
+                detail,
+                context,
+                bias
+            )
             detail["bet_style"]=shown_meta.get("スタイル","")
             detail["bet_budget"]=shown_meta.get("予算",0)
             detail["bet_plan_json"]=plan_to_json(shown_plan)
 
             fingerprint=(
-                date_iso,str(course),str(race),
+                date_iso,
+                str(course),
+                str(race),
                 tuple(
-                    (str(r.get("horse_no","")),round(float(r.get("win_prob",0)),8),
-                     str(r.get("印","")),str(r.get("odds","")),
-                     str(r.get("bet_style","")),str(r.get("bet_budget","")),
-                     str(r.get("bet_plan_json","")))
-                    for _,r in detail.sort_values("horse_no").iterrows()
+                    (
+                        str(r.get("horse_no","")),
+                        round(float(r.get("win_prob",0)),8),
+                        str(r.get("印","")),
+                        str(r.get("odds","")),
+                        str(r.get("bet_style","")),
+                        str(r.get("bet_budget","")),
+                        str(r.get("bet_plan_json","")),
+                    )
+                    for _,r in detail.sort_values(
+                        "horse_no"
+                    ).iterrows()
                 )
             )
-            if st.session_state.get("_saved_fp_16") != fingerprint:
+
+            if st.session_state.get("_saved_fp_19") != fingerprint:
                 try:
-                    si=save_prediction_if_new(history_backend,detail,"1.8")
-                    st.session_state["_saved_fp_16"]=fingerprint
+                    si=save_prediction_if_new(
+                        history_backend,
+                        detail,
+                        "1.9"
+                    )
+                    st.session_state[
+                        "_saved_fp_19"
+                    ]=fingerprint
                     if si.get("saved"):
-                        st.caption("📝 この予想を評価履歴へ記録しました。")
+                        st.caption(
+                            "📝 このレースの予想を評価履歴へ記録しました。"
+                        )
                 except Exception as ex:
-                    st.warning(f"予想履歴を保存できませんでした：{ex}")
+                    st.warning(
+                        f"予想履歴を保存できませんでした：{ex}"
+                    )
 
         except Exception as e:
-            st.error(f"予想できませんでした：{e}")
+            st.error(
+                f"選択レースの詳細を表示できませんでした：{e}"
+            )
+
 
 
 with st.container(border=True):
@@ -679,7 +873,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.8.2の自己評価について"):
+with st.expander("Ver.1.9の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -689,7 +883,7 @@ with st.expander("Ver.1.8.2の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.8.2の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.9の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
