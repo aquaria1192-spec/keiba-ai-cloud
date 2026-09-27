@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-09-27",
+  "purpose": "Ver.1.10 safe baseline vs Ver.1.11 rebuild vs Ver.1.12 probability-calibrated candidate",
+  "source": {
+    "file": "training_history_recommended_2016_2025.csv",
+    "rows": 464232,
+    "races": 33244,
+    "date_quality": "sequence_proxy",
+    "note": "All existing 2016-2025 rows use proxy sequence dates; no claim is made about exact elapsed-day features."
+  },
+  "split": {
+    "train": "2016-2023",
+    "train_rows": 372982,
+    "development_calibration": "2024",
+    "development_rows": 45611,
+    "development_races": 3327,
+    "final_holdout": "2025",
+    "final_rows": 45639,
+    "final_races": 3289
+  },
+  "ver110": {
+    "2024": {
+      "top_pick_win_rate": 0.3489630297565374,
+      "top_pick_top3_rate": 0.6657649534114818,
+      "win_auc": 0.8486682104039914,
+      "win_logloss": 0.20934204555145633,
+      "win_brier": 0.05971262714798902,
+      "top3_auc": 0.8339123773277783,
+      "top3_logloss": 0.5062816318140931,
+      "top3_brier": 0.17128364667036092
+    },
+    "2025": {
+      "top_pick_win_rate": 0.349346305868045,
+      "top_pick_top3_rate": 0.6643356643356644,
+      "win_auc": 0.8557724614854864,
+      "win_logloss": 0.20630148305579013,
+      "win_brier": 0.05887957292967055,
+      "top3_auc": 0.8327992819090833,
+      "top3_logloss": 0.5085872093760293,
+      "top3_brier": 0.17243188099179813
+    },
+    "description": "Commit 723883a logic; HistGB max_iter=140; legacy composite AI-index top-pick"
+  },
+  "ver111_rebuild": {
+    "2024": {
+      "top_pick_win_rate": 0.3612864442440637,
+      "top_pick_top3_rate": 0.6735798016230838,
+      "win_auc": 0.8485755217273938,
+      "win_logloss": 0.209484682968699,
+      "win_brier": 0.05974833827334858,
+      "top3_auc": 0.8346422023494539,
+      "top3_logloss": 0.5050668604083078,
+      "top3_brier": 0.17076001063928803
+    },
+    "2025": {
+      "top_pick_win_rate": 0.36789297658862874,
+      "top_pick_top3_rate": 0.6740650653694132,
+      "win_auc": 0.8546639363260832,
+      "win_logloss": 0.20667317599758545,
+      "win_brier": 0.058926879430781016,
+      "top3_auc": 0.8334442775906236,
+      "top3_logloss": 0.5069748101348353,
+      "top3_brier": 0.1717934897416142
+    },
+    "description": "Enhanced jockey/trainer/going/race-relative features; HistGB max_iter=160; win-probability top-pick",
+    "conclusion": "Ranking and Top3 probability improved versus Ver.1.10, but Win Log Loss/Brier were slightly worse; do not promote this uncalibrated form as champion."
+  },
+  "ver112_calibration": {
+    "fit_period": "2024 only",
+    "win_probability": {
+      "method": "race-wise power calibration",
+      "exponent": 2.0654155666646536,
+      "property": "monotonic within each race, so top-pick ranking is unchanged"
+    },
+    "top3_probability": {
+      "method": "Platt calibration of logit(top3_prob)",
+      "slope": 1.0117893511357146,
+      "intercept": -1.2759957435674174
+    },
+    "2024_development": {
+      "top_pick_win_rate": 0.3612864442440637,
+      "top_pick_top3_rate": 0.6735798016230838,
+      "win_auc": 0.8551219779719588,
+      "win_logloss": 0.20069114854606165,
+      "win_brier": 0.05711723102134571,
+      "win_ece": 0.008550954814281957,
+      "top3_auc": 0.8346394765108445,
+      "top3_logloss": 0.39123351569816245,
+      "top3_brier": 0.1254512979839078,
+      "top3_ece": 0.0028096136118658846
+    },
+    "2025_final_holdout": {
+      "top_pick_win_rate": 0.36789297658862874,
+      "top_pick_top3_rate": 0.6740650653694132,
+      "win_auc": 0.8620325006884281,
+      "win_logloss": 0.196327821309012,
+      "win_brier": 0.056061843692185157,
+      "win_ece": 0.01166072142851623,
+      "top3_auc": 0.833449790120136,
+      "top3_logloss": 0.38909919840405316,
+      "top3_brier": 0.12482493773959685,
+      "top3_ece": 0.0065038755675999975
+    },
+    "adoption_check": "Pass: on untouched 2025 holdout, Ver.1.12 calibration improves Win Log Loss, Win Brier, Top3 Log Loss, Top3 Brier and top-pick rates versus the Ver.1.10 safe baseline."
+  },
+  "guardrails": [
+    "2025 was not used to fit calibration constants.",
+    "ROI is not used as a model-adoption criterion.",
+    "The calibration is applied only when the active ensemble contains exactly one histgb model.",
+    "New true-date online learning remains separate from sequence_proxy legacy data."
+  ]
+}
