@@ -89,7 +89,7 @@
       <div class="scoreHoleHead"><div><div class="cap">入力ホール</div><div id="scoreHoleNo" class="scoreHoleNo">1H</div></div><button id="finishRound" class="tiny">ラウンド終了</button></div>
       <div class="scoreMiniGrid">
         <div class="field"><label for="scorePar">PAR</label><select id="scorePar"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
-        <div class="field"><label>スコア</label><div class="scoreStepper"><button id="scoreMinus" class="mini">−</button><div id="scoreValue" class="scoreValue">4</div><button id="scorePlus" class="mini">＋</button></div></div>
+        <div class="field"><label>スコア</label><div class="scoreStepper"><button id="scoreMinus" class="mini">−</button><button id="scoreValue" class="scoreValue" type="button" style="border:0;background:transparent">--</button><button id="scorePlus" class="mini">＋</button></div></div>
         <div class="field"><label for="scorePutts">パット</label><input id="scorePutts" type="number" min="0" max="9" inputmode="numeric" placeholder="--"></div>
       </div>
       <div class="scoreMiniGrid">
@@ -220,7 +220,7 @@ function startRound(){
   var existing=activeRound();
   if(existing&&!existing.completed&&!confirm("進行中のラウンドがあります。新しいラウンドを開始しますか？"))return;
   var r={id:Date.now(),date:dateYmd(new Date()),courseId:c.id,courseName:c.name,createdAt:new Date().toISOString(),completed:false,holes:[]};
-  for(var i=0;i<18;i++)r.holes.push(defaultHole());
+  for(var i=0;i<18;i++){var h=defaultHole();if(c.source&&Array.isArray(c.source.pars)&&c.source.pars[i])h.par=Number(c.source.pars[i])||4;r.holes.push(h)}
   state.rounds.unshift(r);state.activeRoundId=String(r.id);state.scoreHole=1;localStorage.setItem("gdn_active_round",state.activeRoundId);localStorage.setItem("gdn_score_hole","1");saveRounds();renderScore();toast("ラウンドを開始しました");
 }
 function holeScoreData(){var r=activeRound();return r?r.holes[state.scoreHole-1]:null}
@@ -309,7 +309,7 @@ $("newCourse").onclick=newCourse;$("deleteCourse").onclick=deleteCourse;$("cours
 $("exportCourses").onclick=exportCourses;$("importCourses").onclick=function(){$("importFile").click()};$("importFile").onchange=function(){if(this.files&&this.files[0])importCoursesFile(this.files[0]);this.value=""};
 $("startShot").onclick=startShot;$("finishShot").onclick=finishShot;$("cancelShot").onclick=cancelShot;$("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);renderRecords()}};
 $("newRound").onclick=startRound;$("finishRound").onclick=finishRound;
-$("scoreMinus").onclick=function(){adjustScore(-1)};$("scorePlus").onclick=function(){adjustScore(1)};
+$("scoreMinus").onclick=function(){adjustScore(-1)};$("scorePlus").onclick=function(){adjustScore(1)};$("scoreValue").onclick=function(){var h=holeScoreData();if(!h)return;h.score=Number(h.par)||4;saveRounds();renderScoreEditor()};
 $("prevScoreHole").onclick=function(){saveScoreEditor();setScoreHole(state.scoreHole-1)};$("nextScoreHole").onclick=function(){saveScoreEditor();if(state.scoreHole<18)setScoreHole(state.scoreHole+1)};
 ["scorePar","scorePutts","scoreOb","scorePenalty","scoreMemo"].forEach(function(id){$(id).addEventListener("change",saveScoreEditor)});
 document.querySelectorAll("#fwSeg button").forEach(function(b){b.onclick=function(){var h=holeScoreData();if(!h)return;h.fw=h.fw===b.dataset.v?null:b.dataset.v;saveRounds();renderScoreEditor()}});
