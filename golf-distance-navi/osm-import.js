@@ -159,39 +159,114 @@ function parsePar(tags){
   var n=parseInt(tags.par,10);
   return n>=3&&n<=6?n:null;
 }
+function parseHoleNo(tags){
+  if(!tags)return null;
+  var vals=[tags.ref,tags.hole,tags["golf:hole"],tags.name];
+  for(var i=0;i<vals.length;i++){
+    if(vals[i]==null)continue;
+    var m=String(vals[i]).trim().match(/^(?:hole\s*)?#?\s*(\d{1,2})(?:\s*h)?$/i);
+    if(m){
+      var n=parseInt(m[1],10);
+      if(n>=1&&n<=18)return n;
+    }
+  }
+  return null;
+}
+function centerOfFeature(e){
+  var g=geomPoints(e);
+  if(g.length>=3)return centroid(g);
+  if(g.length)return g[Math.floor(g.length/2)];
+  return point(e);
+}
 function buildCourse(data,place){
   var center={lat:+place.lat,lng:+place.lon};
   var holes=data.elements.filter(function(e){return e.type==="way"&&e.tags&&e.tags.golf==="hole"&&geomPoints(e).length>=2});
-  var greens=data.elements.filter(function(e){return e.type==="way"&&e.tags&&e.tags.golf==="green"&&geomPoints(e).length>=3});
+  var greens=data.elements.filter(function(e){return e.tags&&e.tags.golf==="green"});
   var pins=data.elements.filter(function(e){return e.tags&&e.tags.golf==="pin"});
+  var tees=data.elements.filter(function(e){return e.tags&&e.tags.golf==="tee"});
   var relations=data.elements.filter(function(e){return e.type==="relation"&&e.tags&&(e.tags.golf==="course"||e.tags.type==="golf")});
-  greens.forEach(function(e){e._geom=geomPoints(e);e._center=centroid(e._geom)});
-  pins.forEach(function(e){e._center=point(e)});
+
+  holes.forEach(function(e){
+    e._geom=geomPoints(e);e._start=e._geom[0];e._end=e._geom[e._geom.length-1];e._ref=parseHoleNo(e.tags);
+  });
+  greens.forEach(function(e){e._geom=geomPoints(e);e._center=centerOfFeature(e);e._ref=parseHoleNo(e.tags)});
+  pins.forEach(function(e){e._center=centerOfFeature(e);e._ref=parseHoleNo(e.tags)});
+  tees.forEach(function(e){e._center=centerOfFeature(e);e._ref=parseHoleNo(e.tags)});
+
   var rel=pickRelation(relations,place.display_name||place.name||"");
+  var holeById=new Map(holes.map(function(h){return[h.id,h]}));
   if(rel&&Array.isArray(rel.members)){
-    var ids=new Set(rel.members.filter(function(m){return m.type==="way"}).map(function(m){return m.ref}));
-    var inRel=holes.filter(function(h){return ids.has(h.id)});
-    if(inRel.length>=6)holes=inRel;
+    var ordered=rel.members.filter(function(m){return m.type==="way"&&holeById.has(m.ref)});
+    if(ordered.length>=6){
+      ordered.forEach(function(m,i){
+        var h=holeById.get(m.ref);
+        if(!h._ref&&i<18)h._relRef=i+1;
+      });
+      var ids=new Set(ordered.map(function(m){return m.ref}));
+      var inRel=holes.filter(function(h){return ids.has(h.id)});
+      if(inRel.length>=6)holes=inRel;
+    }
   }
-  var byRef={};
-  holes.forEach(function(h){
-    var ref=parseInt(h.tags&&h.tags.ref,10);
-    if(!(ref>=1&&ref<=18))return;
-    var g=geomPoints(h),end=g[g.length-1],d=hav(center,end);
-    if(!byRef[ref]||d<byRef[ref]._d)byRef[ref]={el:h,geom:g,_d:d};
-  });
-  var out={},frontN=0,centerN=0,backN=0;
-  Object.keys(byRef).forEach(function(k){
-    var rec=byRef[k],g=rec.geom,end=g[g.length-1],prev=g[g.length-2];
-    var pin=nearest(pins,end,65),centerPoint=pin?pin._center:end;
-    var green=nearest(greens,centerPoint,100),ext=green?greenExtent(centerPoint,prev,green._geom):null;
-    var h={center:centerPoint,par:parsePar(rec.el.tags),osmHoleId:rec.el.id};
-    centerN++;
-    if(ext&&ext.front){h.front=ext.front;frontN++}
-    if(ext&&ext.back){h.back=ext.back;backN++}
-    out[String(k)]=h;
-  });
+
+  function firstByRef(arr,n){return arr.find(function(x){return x._ref===n})||null}
+  function holeForRef(n){
+    return holes.find(function(h){return h._ref===n||h._relRef===n})||null;
+  }
+  function holeNearTee(tee){
+    if(!tee||!tee._center)return null;
+    var best=null,bd=120;
+    holes.forEach(function(h){
+      if(!h._start)return;
+      var d=hav(tee._center,h._start);
+      if(d<bd){bd=d;best=h}
+    });
+    return best;
+  }
+
+  var out={},frontN=0,centerN=0,backN=0,sourceCounts={hole:0,pin:0,green:0,tee:0,relation:0};
+  for(var n=1;n<=18;n++){
+    var hole=holeForRef(n);
+    var pin=firstByRef(pins,n);
+    var green=firstByRef(greens,n);
+    var tee=firstByRef(tees,n);
+
+    if(!hole&&tee)hole=holeNearTee(tee);
+
+    var centerPoint=pin&&pin._center?pin._center:(green&&green._center?green._center:(hole&&hole._end?hole._end:null));
+    if(!centerPoint)continue;
+
+    if(!green){
+      green=nearest(greens.map(function(g){g._center=g._center||centerOfFeature(g);return g}),centerPoint,110);
+    }
+    if(!pin){
+      pin=nearest(pins.map(function(p){p._center=p._center||centerOfFeature(p);return p}),centerPoint,70);
+    }
+    if(pin&&pin._center)centerPoint=pin._center;
+    else if(green&&green._center)centerPoint=green._center;
+
+    var prev=hole&&hole._geom&&hole._geom.length>=2?hole._geom[hole._geom.length-2]:(tee&&tee._center?tee._center:null);
+    var ext=(green&&green._geom&&green._geom.length>=3&&prev)?greenExtent(centerPoint,prev,green._geom):null;
+    var tags=(hole&&hole.tags)||(pin&&pin.tags)||(green&&green.tags)||(tee&&tee.tags)||{};
+    var rec={center:centerPoint,par:parsePar(tags),autoSource:""};
+    if(hole){rec.osmHoleId=hole.id;rec.autoSource=hole._ref?"hole.ref":"course-order";sourceCounts.hole++}
+    else if(pin&&pin._ref){rec.autoSource="pin.ref";sourceCounts.pin++}
+    else if(green&&green._ref){rec.autoSource="green.ref";sourceCounts.green++}
+    else if(tee&&tee._ref){rec.autoSource="tee.ref";sourceCounts.tee++}
+    if(ext&&ext.front){rec.front=ext.front;frontN++}
+    if(ext&&ext.back){rec.back=ext.back;backN++}
+    out[String(n)]=rec;centerN++;
+  }
+
+  sourceCounts.relation=holes.filter(function(h){return !!h._relRef}).length;
   var name=(place.name||String(place.display_name||"").split(",")[0]||"OpenStreetMapコース").trim();
+  var diagnostics={
+    rawHoles:holes.length,rawGreens:greens.length,rawPins:pins.length,rawTees:tees.length,
+    refHoles:holes.filter(function(x){return !!x._ref}).length,
+    refGreens:greens.filter(function(x){return !!x._ref}).length,
+    refPins:pins.filter(function(x){return !!x._ref}).length,
+    refTees:tees.filter(function(x){return !!x._ref}).length,
+    relationOrdered:sourceCounts.relation
+  };
   return{
     course:{
       id:"osm-"+String(place.osm_type||"x")+"-"+String(place.osm_id||Date.now()),
@@ -199,7 +274,7 @@ function buildCourse(data,place){
       holes:out,
       source:{provider:"OpenStreetMap",osmType:place.osm_type||"",osmId:place.osm_id||"",importedAt:new Date().toISOString()}
     },
-    stats:{holes:Object.keys(out).length,front:frontN,center:centerN,back:backN}
+    stats:{holes:Object.keys(out).length,front:frontN,center:centerN,back:backN,sources:sourceCounts,diagnostics:diagnostics}
   };
 }
 
@@ -277,18 +352,21 @@ async function importSelected(){
   msg("選択したゴルフ場のホール情報を取得しています…","");
   try{
     var pos=await resolveCenter(selected),lat=pos.lat,lon=pos.lon,radius=4500;
-    var q='[out:json][timeout:25];('+
+    var q='[out:json][timeout:30];('+
       'way(around:'+radius+','+lat+','+lon+')["golf"="hole"];'+
-      'way(around:'+radius+','+lat+','+lon+')["golf"="green"];'+
-      'node(around:'+radius+','+lat+','+lon+')["golf"="pin"];'+
-      'way(around:'+radius+','+lat+','+lon+')["golf"="pin"];'+
+      'nwr(around:'+radius+','+lat+','+lon+')["golf"="green"];'+
+      'nwr(around:'+radius+','+lat+','+lon+')["golf"="pin"];'+
+      'nwr(around:'+radius+','+lat+','+lon+')["golf"="tee"];'+
       'relation(around:'+radius+','+lat+','+lon+')["golf"="course"];'+
       'relation(around:'+radius+','+lat+','+lon+')["type"="golf"];'+
-    ');out tags geom center;';
+    ');out body geom center;';
     var resp=await fetch(OVERPASS+"?data="+encodeURIComponent(q),{headers:{"Accept":"application/json"}});
     if(!resp.ok)throw new Error("コース詳細サービス HTTP "+resp.status);
     var data=await resp.json(),built=buildCourse(data,selected);
-    if(!built.stats.holes)throw new Error("このゴルフ場にはホール番号付きデータが登録されていません。手動登録をご利用ください。");
+    if(!built.stats.holes){
+      var d=built.stats.diagnostics||{};
+      throw new Error("ホール番号を判別できませんでした。OSM登録: hole "+(d.rawHoles||0)+"（番号付 "+(d.refHoles||0)+"）/ tee "+(d.rawTees||0)+"（番号付 "+(d.refTees||0)+"）/ green "+(d.rawGreens||0)+"（番号付 "+(d.refGreens||0)+"）/ pin "+(d.rawPins||0)+"（番号付 "+(d.refPins||0)+"）。");
+    }
     var courses=read("gdn_courses",[]),idx=courses.findIndex(function(c){return c.id===built.course.id});
     if(idx>=0)courses[idx]=built.course;else courses.push(built.course);
     write("gdn_courses",courses);
