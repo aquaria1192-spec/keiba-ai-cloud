@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto / morning / pre_race / settle"
+        description: "auto / morning / pre_race / settle / learn"
         required: false
         default: "auto"
       target_date:
@@ -20,6 +20,8 @@ on:
     - cron: "*/20 0-7 * * 6,0,1"
     # 17:30 JST on Sat/Sun/Mon: automatic result settlement.
     - cron: "30 8 * * 6,0,1"
+    # Tuesday 03:30 JST: evaluate a challenger when >=200 new settled races exist.
+    - cron: "30 18 * * 1"
 
 permissions:
   contents: write
@@ -46,7 +48,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run automatic prediction / settlement
+      - name: Import and regression smoke checks
+        run: |
+          python -m py_compile automation_runner.py online_learning.py streamlit_app.py
+          python - <<'PY'
+          from race_day_context import _race_no_int_safe
+          import automation_runner
+          import online_learning
+
+          assert _race_no_int_safe("1R") == 1
+          assert _race_no_int_safe("01R") == 1
+          assert _race_no_int_safe(1) == 1
+          assert online_learning.MIN_NEW_RACES >= 200
+          print("Regression smoke checks OK")
+          PY
+
+      - name: Run automatic prediction / settlement / learning
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -54,7 +71,14 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode }}"
           DATE="${{ github.event.inputs.target_date }}"
-          if [ -z "$MODE" ]; then MODE="auto"; fi
+          SCHEDULE="${{ github.event.schedule }}"
+          if [ -z "$MODE" ]; then
+            if [ "$SCHEDULE" = "30 18 * * 1" ]; then
+              MODE="learn"
+            else
+              MODE="auto"
+            fi
+          fi
           if [ -n "$DATE" ]; then
             python automation_runner.py --mode "$MODE" --date "$DATE"
           else
