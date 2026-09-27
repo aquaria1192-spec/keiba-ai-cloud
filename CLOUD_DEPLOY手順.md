@@ -1,35 +1,25 @@
-# Cloud Ver.1.7.1 更新手順
+# Cloud Ver.1.8 更新手順
 
-差し替え用ZIPを展開し、`keiba-ai-cloud` の main ブランチへアップロードします。
+GitHubの `keiba-ai-cloud` main ブランチへ差し替えてください。
 
-更新:
+更新ファイル:
 - streamlit_app.py
-- evaluation_store.py
+- race_day_context.py
+- cloud_features.py
 - automation_runner.py
 - README.md
 - CLOUD_DEPLOY手順.md
-- .github/workflows/keiba_auto_predictions.yml
+- data/cloud_feature_store.joblib
 
-新規:
+`cloud_feature_store.joblib` は騎手の条件別成績を追加しているため、必ず更新してください。
+
+既存の以下はそのまま利用できます。
+- prediction-history ブランチ
+- GitHub Actions設定
 - payout_tools.py
+- evaluation_store.py
+- cloud_model.joblib
 
-Commit changes 後、既存のGitHub Actions設定と
-`prediction-history` ブランチはそのまま利用できます。
-
-## 自動買い目
-初期値は「標準・2,000円/レース」です。
-
-## 9月27日の既存朝予想
-Ver.1.7ですでに朝予想CSVを作っていても削除不要です。
-Ver.1.7.1の次回Actions実行時に、買い目がない既存朝予想へ
-保存済み予想だけを使って買い目を補完します。
-
-## 答え合わせ後
-アプリに次を表示します。
-- 確定回収率
-- 購入総額
-- 払戻総額
-- 収支
-- レース別回収率
-- 日別回収率
-- 券種別回収率
+更新後、Streamlitで「最新データに更新」を押してください。
+当日コンディション欄にJRA天候と芝/ダート馬場が表示され、
+予想表には騎手過去3着内率・騎手補正が表示されます。

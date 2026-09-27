@@ -40,6 +40,11 @@ def enrich_entries_cloud(entries, store=None):
     tr = store["trainer"].copy()
     gr = store["gate"].copy()
     glob = store["global"]
+    jc = store.get("jockey_course")
+    js = store.get("jockey_surface")
+    jd = store.get("jockey_distance")
+    jg = store.get("jockey_going")
+    jt = store.get("jockey_trainer")
 
     out = ent.merge(latest, on="horse_name", how="left", suffixes=("","_prev"))
     out = out.merge(recent, on="horse_name", how="left")
@@ -57,6 +62,39 @@ def enrich_entries_cloud(entries, store=None):
     out = out.merge(jr, on="jockey", how="left")
     out = out.merge(tr, on="trainer", how="left")
     out = out.merge(gr, on=["course","surface","distance_bucket","gate"], how="left")
+
+    # Ver.1.8: jockey performance by race condition. Overall jockey rate is
+    # already a learned model feature; these interaction rates are used only
+    # by the transparent post-model jockey adjustment.
+    if jc is not None and len(jc):
+        q=jc.rename(columns={"rate":"jockey_course_top3_rate","starts":"jockey_course_starts"})
+        out=out.merge(q,on=["jockey","course"],how="left")
+    if js is not None and len(js):
+        q=js.rename(columns={"rate":"jockey_surface_top3_rate","starts":"jockey_surface_starts"})
+        out=out.merge(q,on=["jockey","surface"],how="left")
+    if jd is not None and len(jd):
+        q=jd.rename(columns={"rate":"jockey_distance_top3_rate","starts":"jockey_distance_starts"})
+        out=out.merge(q,on=["jockey","distance_bucket"],how="left")
+    if jg is not None and len(jg):
+        q=jg.rename(columns={"rate":"jockey_going_top3_rate","starts":"jockey_going_starts"})
+        out=out.merge(q,on=["jockey","surface","going"],how="left")
+    if jt is not None and len(jt):
+        q=jt.rename(columns={"rate":"jockey_trainer_top3_rate","starts":"jockey_trainer_starts"})
+        out=out.merge(q,on=["jockey","trainer"],how="left")
+
+    for rc,sc in [
+        ("jockey_course_top3_rate","jockey_course_starts"),
+        ("jockey_surface_top3_rate","jockey_surface_starts"),
+        ("jockey_distance_top3_rate","jockey_distance_starts"),
+        ("jockey_going_top3_rate","jockey_going_starts"),
+        ("jockey_trainer_top3_rate","jockey_trainer_starts"),
+    ]:
+        if rc not in out.columns:
+            out[rc]=np.nan
+        if sc not in out.columns:
+            out[sc]=0
+        out[rc]=pd.to_numeric(out[rc],errors="coerce")
+        out[sc]=pd.to_numeric(out[sc],errors="coerce").fillna(0)
 
     # Ver.1.5: today's going aptitude and typical running style.
     hg=store.get("horse_going")

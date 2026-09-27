@@ -21,7 +21,8 @@ from auto_data_builder import (
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day
 from race_day_context import (
-    fetch_day_contexts, apply_official_going, apply_day_adjustments
+    fetch_day_contexts, apply_official_going, merge_entry_conditions,
+    apply_day_adjustments, fetch_same_day_bias, collect_official_entry_urls
 )
 from evaluation_store import (
     prediction_snapshot, norm_history, merge_histories,
@@ -141,12 +142,14 @@ def save_history(store,df,message):
 def snapshot_race(
     race_id,target_date,model_pkg,feature_store,
     contexts,snapshot_type,post_time="",minutes_before=np.nan,
+    official_entry_urls=None,
 ):
     s=_session()
     entries=fetch_race_entries(race_id,target_date,s,timeout=20)
     if entries is None or len(entries)==0:
         raise RuntimeError("出走表が空です。")
 
+    contexts=merge_entry_conditions(contexts,entries)
     entries,_=apply_official_going(entries,contexts,target_date)
     features=enrich_entries_cloud(entries,feature_store)
     detail,_=batch_predict_day(
@@ -156,15 +159,15 @@ def snapshot_race(
 
     course=str(entries.iloc[0]["course"])
     context=contexts.get(course,{})
-    # Historical going aptitude/weather adjustment is still useful.
-    # Same-day bias is intentionally zero here unless the app is opened,
-    # because scheduled automation should be light and robust.
-    detail=apply_day_adjustments(
-        detail,context,
-        {"races_used":0,"inner_score":0.0,"front_score":0.0,
-         "summary":"自動保存では当日バイアス未使用"},
-        enabled=True,
-    )
+    race_no=int(str(entries.iloc[0].get("race_no","0R")).replace("R",""))
+    surface=str(entries.iloc[0].get("surface",""))
+    bias=fetch_same_day_bias(
+        target_date,course,race_no,surface,official_entry_urls or {}
+    ) if official_entry_urls else {
+        "races_used":0,"inner_score":0.0,"front_score":0.0,
+        "summary":"終了済みレースなし","jockey_stats":{}
+    }
+    detail=apply_day_adjustments(detail,context,bias,enabled=True)
     detail["snapshot_type"]=snapshot_type
     detail["post_time"]=post_time
     detail["minutes_before_post"]=minutes_before
@@ -177,7 +180,7 @@ def snapshot_race(
     detail["bet_budget"]=int(meta.get("予算",AUTO_BET_BUDGET))
     detail["bet_plan_json"]=plan_to_json(plan)
 
-    snap=prediction_snapshot(detail,app_version="1.7.1")
+    snap=prediction_snapshot(detail,app_version="1.8")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):
@@ -310,7 +313,8 @@ def run_predictions(mode,target_date,store):
         return
 
     courses=sorted(set(x["course"] for x in due if x.get("course")))
-    contexts=fetch_day_contexts(target_date,courses)
+    official_urls=collect_official_entry_urls(target_date,courses)
+    contexts=fetch_day_contexts(target_date,courses,official_urls)
     model_pkg,feature_store=load_assets()
 
     new=[]
@@ -324,6 +328,7 @@ def run_predictions(mode,target_date,store):
                 snapshot_type=mode,
                 post_time=x.get("post_time",""),
                 minutes_before=mins,
+                official_entry_urls=official_urls,
             )
             if len(snap):
                 new.append(snap)

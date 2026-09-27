@@ -193,6 +193,114 @@ def parse_jra_baba_html(html: str, source_url="") -> dict:
         "jra_baba_url":source_url,
     }
 
+
+def _parse_going_token(text, surface):
+    # JRA is normally UTF-8, but a few intermediate decoders can render 稍重
+    # as a replacement-character sequence. Treat that specific pattern as 稍重.
+    m=re.search(surface+r"\s*(不良|稍重|良|重|�.?重)",text)
+    if not m:
+        return ""
+    v=m.group(1)
+    return "稍重" if "�" in v else v
+
+def parse_jra_entry_condition_html(html: str, source_url="") -> dict:
+    """Parse live weather/going from a JRA official race-card page."""
+    soup=BeautifulSoup(html or "","lxml")
+    text=_clean(soup.get_text(" ",strip=True))
+    # Only inspect the race header. Previous-race form later on the page also
+    # contains many going strings and must not be mistaken for today's going.
+    cut=len(text)
+    for token in ("本賞金", "枠 馬番", "枠 馬 番"):
+        p=text.find(token)
+        if p>=0:
+            cut=min(cut,p)
+    head=text[:min(cut,3500)]
+
+    dm=re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日",head)
+    race_date=""
+    if dm:
+        race_date=f"{int(dm.group(1)):04d}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}"
+    cm=re.search(r"\d+回\s*([^\s\d]+?)\s*\d+日",head)
+    course=cm.group(1) if cm else ""
+    rm=re.search(r"(\d+)レース",head)
+    race_no=int(rm.group(1)) if rm else None
+    tm=re.search(r"発走時刻[:：]?\s*(\d{1,2})時(\d{2})分",head)
+    post_time=f"{int(tm.group(1)):02d}:{int(tm.group(2)):02d}" if tm else ""
+    wm=re.search(r"天候\s*([^\s]+)",head)
+    weather=wm.group(1) if wm else ""
+    turf=_parse_going_token(head,"芝")
+    dirt=_parse_going_token(head,"ダート")
+    return {
+        "course":course,"race_date":race_date,"race_no":race_no,
+        "post_time":post_time,"jra_weather":weather,
+        "turf_going":turf,"dirt_going":dirt,
+        "source_url":source_url,
+    }
+
+def fetch_jra_live_entry_contexts(target_date: date, courses=None, entry_url_map=None, session=None) -> dict:
+    """Get current JRA weather/going from race cards; more current than weekly baba text."""
+    s=session or _session()
+    wanted=set(courses or [])
+    urls=dict(entry_url_map or {})
+    if not urls:
+        urls=collect_official_entry_urls(target_date,courses,s)
+    by_course={}
+    for rid,url in urls.items():
+        course=VENUE_CODE.get(str(rid)[4:6],"")
+        if not course or (wanted and course not in wanted):
+            continue
+        by_course.setdefault(course,[]).append((int(str(rid)[-2:]),url))
+
+    out={}
+    for course,items in by_course.items():
+        # Later races are often the most useful source after conditions update.
+        items=sorted(items,reverse=True)
+        merged={
+            "course":course,"race_date":"","jra_weather":"",
+            "turf_going":"","dirt_going":"","source_urls":[],
+        }
+        for _,url in items:
+            try:
+                r=s.get(url,timeout=20); r.raise_for_status()
+                q=parse_jra_entry_condition_html(r.text,url)
+                if q.get("race_date") and q.get("race_date")!=target_date.isoformat():
+                    continue
+                if q.get("race_date"): merged["race_date"]=q["race_date"]
+                if q.get("jra_weather"): merged["jra_weather"]=q["jra_weather"]
+                if q.get("turf_going"): merged["turf_going"]=q["turf_going"]
+                if q.get("dirt_going"): merged["dirt_going"]=q["dirt_going"]
+                merged["source_urls"].append(url)
+                if merged["turf_going"] and merged["dirt_going"] and merged["jra_weather"]:
+                    break
+            except Exception:
+                continue
+        if merged["turf_going"] or merged["dirt_going"] or merged["jra_weather"]:
+            merged["is_target_date"]=(merged.get("race_date")==target_date.isoformat())
+            out[course]=merged
+    return out
+
+def merge_entry_conditions(contexts: dict, entries: pd.DataFrame) -> dict:
+    """Fallback: expose the going already present in acquired race-card rows."""
+    out={k:dict(v) for k,v in (contexts or {}).items()}
+    if entries is None or len(entries)==0:
+        return out
+    for course,g in entries.groupby(entries["course"].astype(str)):
+        ctx=out.setdefault(str(course),{"course":str(course)})
+        for surface,key in (("芝","turf_going"),("ダート","dirt_going")):
+            x=g[g["surface"].astype(str)==surface]
+            vals=x.get("going",pd.Series(dtype=object)).fillna("").astype(str)
+            vals=vals[vals.isin(["良","稍重","重","不良"])]
+            if len(vals):
+                # Acquired race-card rows are same-day data. Keep an explicitly
+                # parsed JRA live header if present; otherwise they override the
+                # weekly baba-page value, which can still say Friday/noon.
+                live_source=str(ctx.get(key+"_source", ""))
+                if "JRA公式出馬表（当日）" not in live_source:
+                    ctx[key]=vals.mode().iloc[0]
+                    ctx[key+"_source"]="取得出走表（当日）"
+        ctx.setdefault("is_target_date",True)
+    return out
+
 def fetch_jra_baba_contexts(target_date: date, courses=None, session=None) -> dict:
     s = session or _session()
     wanted = set(courses or [])
@@ -262,14 +370,33 @@ def fetch_weather_context(course: str, target_date: date, session=None) -> dict:
     except Exception as e:
         return {"error":str(e),"source":"Open-Meteo"}
 
-def fetch_day_contexts(target_date: date, courses) -> dict:
+def fetch_day_contexts(target_date: date, courses, entry_url_map=None) -> dict:
     courses=list(dict.fromkeys([str(x) for x in courses if str(x)]))
     s=_session()
     jra=fetch_jra_baba_contexts(target_date,courses,s)
+    live=fetch_jra_live_entry_contexts(target_date,courses,entry_url_map,s)
     out={}
     for course in courses:
-        ctx=dict(jra.get(course,{course:course}))
+        ctx=dict(jra.get(course,{"course":course}))
         ctx["course"]=course
+        lv=live.get(course) or {}
+        # Race-card header is the primary same-day source for going/weather.
+        if lv.get("turf_going"):
+            ctx["turf_going"]=lv["turf_going"]
+            ctx["turf_going_source"]="JRA公式出馬表（当日）"
+        if lv.get("dirt_going"):
+            ctx["dirt_going"]=lv["dirt_going"]
+            ctx["dirt_going_source"]="JRA公式出馬表（当日）"
+        if lv.get("jra_weather"):
+            ctx["jra_weather"]=lv["jra_weather"]
+            ctx["weather_source"]="JRA公式出馬表（当日）"
+        if lv.get("race_date"):
+            ctx["live_race_date"]=lv["race_date"]
+        if lv.get("source_urls"):
+            ctx["live_source_urls"]=lv["source_urls"]
+        ctx["is_target_date"]=bool(
+            lv.get("is_target_date") or ctx.get("race_date")==target_date.isoformat()
+        )
         ctx["weather"]=fetch_weather_context(course,target_date,s)
         out[course]=ctx
     return out
@@ -293,7 +420,10 @@ def apply_official_going(entries: pd.DataFrame, contexts: dict, target_date: dat
         if val in ("良","稍重","重","不良"):
             old=str(r.get("going","")).strip()
             out.at[i,"going"]=val
-            out.at[i,"going_source"]="JRA馬場情報"
+            out.at[i,"going_source"]=ctx.get(
+                "turf_going_source" if surface=="芝" else "dirt_going_source",
+                "JRA馬場情報"
+            )
             if old != val:
                 changed += 1
     return out, changed
@@ -388,6 +518,7 @@ def parse_jra_result_html(html: str) -> dict:
     c_finish=_find_col(cols,["着順"])
     c_no=_find_col(cols,["馬番","馬 番"])
     c_pass=_find_col(cols,["コーナー 通過順位","通過順位","コーナー"])
+    c_jockey=_find_col(cols,["騎手名","騎手"])
     rows=[]
     for _,r in table.iterrows():
         fm=re.search(r"^\s*(\d+)",str(r.get(c_finish,"")))
@@ -398,7 +529,14 @@ def parse_jra_result_html(html: str) -> dict:
         passage=[]
         if c_pass:
             passage=[int(x) for x in re.findall(r"\d+",str(r.get(c_pass,"")))]
-        rows.append({"finish":finish,"horse_no":horse_no,"first_pos":passage[0] if passage else np.nan})
+        jockey=_clean(r.get(c_jockey,"")) if c_jockey else ""
+        jockey=re.sub(r"^[▲△☆★]", "", jockey)
+        jockey=re.sub(r"\s+", "", jockey)
+        rows.append({
+            "finish":finish,"horse_no":horse_no,
+            "first_pos":passage[0] if passage else np.nan,
+            "jockey":jockey,
+        })
     return {"surface":surface,"going":going,"rows":pd.DataFrame(rows)}
 
 def fetch_same_day_bias(
@@ -423,6 +561,7 @@ def fetch_same_day_bias(
     top3_norm_pos=[]
     used=0
     sources=[]
+    jockey_acc={}
     for rn,rid,entry_url in prior:
         result_url=_result_url_from_entry(entry_url,s)
         if not result_url:
@@ -431,10 +570,23 @@ def fetch_same_day_bias(
             rr=s.get(result_url,timeout=15)
             rr.raise_for_status()
             parsed=parse_jra_result_html(rr.text)
-            if parsed.get("surface") != surface:
-                continue
             df=parsed.get("rows")
             if df is None or len(df)<3:
+                continue
+
+            # Same-day jockey form uses all prior races at this course, not only
+            # the current surface. It is a small transparent adjustment.
+            for _,jr in df.iterrows():
+                j=str(jr.get("jockey","")).strip()
+                if not j:
+                    continue
+                a=jockey_acc.setdefault(j,{"rides":0,"wins":0,"top3":0})
+                a["rides"]+=1
+                fi=int(jr.get("finish",99))
+                if fi==1: a["wins"]+=1
+                if fi<=3: a["top3"]+=1
+
+            if parsed.get("surface") != surface:
                 continue
             field_size=max(int(df["horse_no"].max()),len(df))
             top=df[df["finish"]<=3].copy()
@@ -472,12 +624,21 @@ def fetch_same_day_bias(
         pace_txt="前有利" if front_score>0.12 else ("差し有利" if front_score<-0.12 else "脚質ほぼ中立")
         summary=f"{used}レース集計：{gate_txt}／{pace_txt}"
 
+    jockey_stats={}
+    for j,a in jockey_acc.items():
+        rides=max(int(a.get("rides",0)),1)
+        jockey_stats[j]={
+            **a,
+            "win_rate":float(a.get("wins",0))/rides,
+            "top3_rate":float(a.get("top3",0))/rides,
+        }
     return {
         "races_used":used,
         "inner_score":inner_score,
         "front_score":front_score,
         "summary":summary,
         "source_urls":sources,
+        "jockey_stats":jockey_stats,
     }
 
 def _surface_moisture(ctx, surface):
@@ -498,6 +659,8 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
     d["基礎勝率"]=pd.to_numeric(d["win_prob"],errors="coerce")
     d["当日補正"]=0.0
     d["補正理由"]=""
+    d["騎手補正"]=0.0
+    d["騎手評価理由"]=""
 
     if not enabled:
         return d
@@ -516,9 +679,14 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
 
     adjs=[]
     reasons=[]
+    jockey_adjs=[]
+    jockey_reasons=[]
+    day_jockey=(bias or {}).get("jockey_stats") or {}
     for _,r in d.iterrows():
         adj=0.0
         rs=[]
+        jockey_adj=0.0
+        jrs=[]
 
         # 1) Historical aptitude for today's official going.
         hgr=pd.to_numeric(pd.Series([r.get("going_top3_rate")]),errors="coerce").iloc[0]
@@ -559,12 +727,58 @@ def apply_day_adjustments(detail: pd.DataFrame, context: dict, bias: dict, enabl
                 adj += a
                 rs.append(f"脚質傾向 {a:+.1f}")
 
+        # 4) Jockey condition fit. Overall jockey_top3_rate is already included
+        # in the learned model, so only course/surface/distance/going/trainer
+        # interaction deltas are added here to avoid double counting.
+        overall=pd.to_numeric(pd.Series([r.get("jockey_top3_rate")]),errors="coerce").iloc[0]
+        pieces=[]
+        for label,rc,sc,w in [
+            ("競馬場","jockey_course_top3_rate","jockey_course_starts",1.0),
+            ("芝ダ","jockey_surface_top3_rate","jockey_surface_starts",0.8),
+            ("距離","jockey_distance_top3_rate","jockey_distance_starts",0.9),
+            ("馬場","jockey_going_top3_rate","jockey_going_starts",0.8),
+            ("厩舎","jockey_trainer_top3_rate","jockey_trainer_starts",0.7),
+        ]:
+            rate=pd.to_numeric(pd.Series([r.get(rc)]),errors="coerce").iloc[0]
+            n=pd.to_numeric(pd.Series([r.get(sc)]),errors="coerce").iloc[0]
+            if pd.notna(overall) and pd.notna(rate) and pd.notna(n) and n>=2:
+                shrunk=(float(n)*float(rate)+10.0*float(overall))/(float(n)+10.0)
+                pieces.append((w,shrunk-float(overall),label,int(n)))
+        if pieces:
+            delta=sum(w*x for w,x,_,_ in pieces)/sum(w for w,_,_,_ in pieces)
+            a=float(np.clip(delta*10.0,-1.25,1.25))
+            if abs(a)>=0.08:
+                jockey_adj+=a
+                labels="・".join(f"{lab}{n}走" for _,_,lab,n in pieces[:3])
+                jrs.append(f"条件別{a:+.1f}({labels})")
+
+        # 5) Jockey's already-finished rides today at the same course.
+        jockey=re.sub(r"\s+","",str(r.get("jockey","")).strip())
+        js=day_jockey.get(jockey) or {}
+        rides=int(js.get("rides",0) or 0)
+        if rides>0 and pd.notna(overall):
+            top3=int(js.get("top3",0) or 0)
+            day_rate=(top3+2.0*float(overall))/(rides+2.0)
+            a=float(np.clip((day_rate-float(overall))*2.2*min(1.0,rides/3.0),-0.75,0.75))
+            if abs(a)>=0.08:
+                jockey_adj+=a
+                jrs.append(f"当日{top3}/{rides} {a:+.1f}")
+
+        jockey_adj=float(np.clip(jockey_adj,-1.7,1.7))
+        adj += jockey_adj
+        if abs(jockey_adj)>=0.08:
+            rs.append(f"騎手 {jockey_adj:+.1f}")
+
         adj=float(np.clip(adj,-5.0,5.0))
         adjs.append(adj)
         reasons.append("／".join(rs) if rs else "補正なし")
+        jockey_adjs.append(jockey_adj)
+        jockey_reasons.append("／".join(jrs) if jrs else "基礎AIに騎手総合成績を反映済み")
 
     d["当日補正"]=adjs
     d["補正理由"]=reasons
+    d["騎手補正"]=jockey_adjs
+    d["騎手評価理由"]=jockey_reasons
 
     # A modest transparent post-model adjustment. It does not pretend that
     # cushion/moisture/bias were part of the original 2016-2025 training set.

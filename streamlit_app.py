@@ -14,7 +14,7 @@ from batch_predict import batch_predict_day
 from betting_tools import race_bet_plan, mark_legend
 from payout_tools import plan_to_json
 from race_day_context import (
-    fetch_day_contexts, apply_official_going,
+    fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
 )
 from evaluation_store import (
@@ -30,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.7.1",
+    page_title="競馬予想AI Cloud Ver.1.8",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -74,8 +74,10 @@ def fetch_entries_cached(date_iso: str):
     return fetch_entries_cloud(pd.Timestamp(date_iso).date())
 
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_context_cached(date_iso: str, courses_tuple):
-    return fetch_day_contexts(pd.Timestamp(date_iso).date(), list(courses_tuple))
+def fetch_context_cached(date_iso: str, courses_tuple, official_items=()):
+    return fetch_day_contexts(
+        pd.Timestamp(date_iso).date(), list(courses_tuple), dict(official_items)
+    )
 
 @st.cache_data(ttl=90, show_spinner=False)
 def fetch_bias_cached(date_iso, course, race_no, surface, official_items):
@@ -117,9 +119,15 @@ def show_day_context(contexts):
             c1,c2,c3=st.columns(3)
             c1.metric("芝",ctx.get("turf_going") or "-")
             c2.metric("ダート",ctx.get("dirt_going") or "-")
-            c3.metric("天気",weather.get("weather_text") or ctx.get("jra_weather") or "-")
+            c3.metric("JRA天候",ctx.get("jra_weather") or weather.get("weather_text") or "-")
+            srcs=[]
+            if ctx.get("turf_going_source"): srcs.append("芝="+str(ctx.get("turf_going_source")))
+            if ctx.get("dirt_going_source"): srcs.append("ダート="+str(ctx.get("dirt_going_source")))
+            if ctx.get("weather_source"): srcs.append("天候="+str(ctx.get("weather_source")))
+            if srcs:
+                st.caption("取得元："+" / ".join(srcs))
             st.write(
-                f"**JRA馬場情報** {date_note}　"
+                f"**JRA馬場情報ページ** {date_note}　"
                 f"含水率 芝：{nfmt(ctx.get('turf_goal'),'%')} / {nfmt(ctx.get('turf_corner'),'%')}　"
                 f"ダート：{nfmt(ctx.get('dirt_goal'),'%')} / {nfmt(ctx.get('dirt_corner'),'%')}"
             )
@@ -150,27 +158,29 @@ def show_prediction(detail, context, bias):
     c1.metric("馬場",str(rg.iloc[0].get("going","")) or "-")
     c2.metric("当日傾向",(bias or {}).get("summary","データなし"))
     weather=(context or {}).get("weather") or {}
-    c3.metric("天気",weather.get("weather_text") or (context or {}).get("jra_weather") or "-")
+    c3.metric("天気",(context or {}).get("jra_weather") or weather.get("weather_text") or "-")
     st.caption(
-        "JRA公式の馬場状態は学習済みAIの going 特徴量へ直接反映。"
-        "含水率・クッション値・当日バイアスは別の「当日補正」として表示しています。"
+        "JRA公式出馬表の当日馬場を最優先で going 特徴量へ反映。"
+        "騎手の過去総合成績は学習済みAI本体、条件別騎手成績と当日騎乗成績は小幅な騎手補正として反映します。"
     )
 
     st.markdown("#### 全出走馬の印付き予想")
     st.caption(mark_legend())
 
-    cols=["順位","印","評価","horse_no","horse_name",
-          "win_prob","top3_prob","基礎AI指数","当日補正","ai_index",
-          "odds","expected_value","補正理由"]
+    cols=["順位","印","評価","horse_no","horse_name","jockey",
+          "win_prob","top3_prob","jockey_top3_rate","騎手補正",
+          "基礎AI指数","当日補正","ai_index",
+          "odds","expected_value","騎手評価理由","補正理由"]
     q=rg[[c for c in cols if c in rg.columns]].rename(columns={
-        "horse_no":"馬番","horse_name":"馬名","win_prob":"勝率",
-        "top3_prob":"3着内率","ai_index":"AI指数",
+        "horse_no":"馬番","horse_name":"馬名","jockey":"騎手",
+        "win_prob":"勝率","top3_prob":"3着内率",
+        "jockey_top3_rate":"騎手過去3着内率","ai_index":"AI指数",
         "odds":"単勝オッズ","expected_value":"AI期待値",
     })
-    for c in ["勝率","3着内率"]:
+    for c in ["勝率","3着内率","騎手過去3着内率"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").map(pct)
-    for c in ["基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
+    for c in ["騎手補正","基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
@@ -207,8 +217,8 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.7.1")
-st.caption("当日補正＋レース結果自動照合＋AI自己評価・学習データ蓄積")
+st.title("🏇 競馬予想AI Cloud Ver.1.8")
+st.caption("JRA当日馬場・騎手データ強化＋自動答え合わせ・回収率集計")
 
 st.markdown("""
 <div class="hero">
@@ -258,7 +268,9 @@ with st.container(border=True):
             with st.spinner("出走表・馬場・天気を取得しています…"):
                 entries,info=fetch_entries_cached(target_date.isoformat())
                 courses=tuple(sorted(entries["course"].dropna().astype(str).unique()))
-                contexts=fetch_context_cached(target_date.isoformat(),courses)
+                official_items=tuple(sorted((info.get("official_entry_urls") or {}).items()))
+                contexts=fetch_context_cached(target_date.isoformat(),courses,official_items)
+                contexts=merge_entry_conditions(contexts,entries)
                 entries,going_changed=apply_official_going(entries,contexts,target_date)
                 features=enrich_entries_cloud(entries,feature_store)
 
@@ -320,7 +332,7 @@ if features is not None and len(features):
         use_day_adjustment=st.toggle(
             "当日馬場・バイアス補正を反映",
             value=True,
-            help="JRA公式馬場状態はAI本体へ反映し、含水率・馬場適性・当日内外/脚質傾向を小幅補正します。"
+            help="JRA公式当日馬場をAIへ反映し、馬場適性・内外/脚質傾向・騎手の条件別成績と当日騎乗成績を小幅補正します。"
         )
 
         try:
@@ -353,7 +365,7 @@ if features is not None and len(features):
             )
             if st.session_state.get("_saved_fp_16") != fingerprint:
                 try:
-                    si=save_prediction_if_new(history_backend,detail,"1.7.1")
+                    si=save_prediction_if_new(history_backend,detail,"1.8")
                     st.session_state["_saved_fp_16"]=fingerprint
                     if si.get("saved"):
                         st.caption("📝 この予想を評価履歴へ記録しました。")
@@ -540,7 +552,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
                 b.metric("払戻総額",f"{metrics['bet_payout']:,}円")
                 c.metric("収支",f"{metrics['bet_profit']:+,}円")
             st.caption(
-                "確定回収率はレース前に固定保存した買い目とJRA公式の確定払戻金で計算します。"
+                "確定回収率はレース前に固定保存した買い目とJRA公式の確定払戻金で計算します。 旧履歴で買い目が未保存の場合も、保存済み予想だけから自動補完して再精算します。"
                 "返還馬を含む買い目は購入額を返還として計上します。"
             )
 
@@ -631,7 +643,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.7.1の自己評価について"):
+with st.expander("Ver.1.8の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -641,7 +653,7 @@ with st.expander("Ver.1.7.1の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.7.1の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.8の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
