@@ -27,7 +27,7 @@
 .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:900;width:min(760px,100%);display:grid;grid-template-columns:repeat(6,1fr);background:#fffffff2;border-top:1px solid var(--line);padding:7px 4px calc(7px + var(--bottom));backdrop-filter:blur(12px)}.nav button{border:0;background:transparent;color:#67756d;min-height:54px;font-size:10px;font-weight:800;display:grid;justify-items:center;align-content:center;gap:2px;border-radius:12px}.nav button span{font-size:19px}.nav button.active{color:var(--g);background:#e9f3ed}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .dot{width:20px;height:20px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 0 0 3px #1976d247}.targetDot{width:24px;height:24px;border-radius:50%;background:#e53935;border:4px solid #fff;box-shadow:0 1px 6px #0006}
-.scoreSummary{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:10px 0 14px}.scoreSum{background:#f3f7f4;border:1px solid #dce8e0;border-radius:12px;padding:9px 5px;text-align:center}.scoreSum .sl{font-size:10px;color:var(--muted);font-weight:800}.scoreSum .sv{font-size:23px;font-weight:900;margin-top:2px}.holeGrid{display:grid;grid-template-columns:repeat(9,1fr);gap:5px;margin:10px 0 14px}.holeBtn{border:1px solid #cad5ce;background:#fff;border-radius:9px;min-height:38px;padding:2px;font-weight:900;font-size:12px}.holeBtn.done{background:#e3f2e9;color:#0f5132;border-color:#83b39a}.holeBtn.active{background:#0f5132;color:#fff;border-color:#0f5132}.scoreHoleHead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.scoreHoleNo{font-size:28px;font-weight:900}.scoreStepper{display:grid;grid-template-columns:52px 1fr 52px;gap:8px;align-items:center}.scoreValue{font-size:46px;font-weight:900;text-align:center;line-height:1}.scoreMiniGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}.seg button{min-height:42px;border:1px solid #bdc8c1;background:#fff;border-radius:10px;font-weight:800}.seg button.on{background:#0f5132;color:#fff;border-color:#0f5132}.roundCard{border-top:1px solid #edf0ee;padding:11px 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}.roundCard:first-child{border-top:0}.roundActions{display:flex;gap:6px}.tiny{border:1px solid #bdc8c1;background:#fff;border-radius:9px;min-height:36px;padding:0 9px;font-weight:800}.roundDelete{color:#8d2020;background:#fff5f5;border-color:#e2bcbc}.scoreTableWrap{overflow-x:auto;margin-top:10px}.scoreTable{border-collapse:collapse;width:100%;min-width:640px;font-size:12px}.scoreTable th,.scoreTable td{border:1px solid #d9e1dc;padding:6px;text-align:center}.scoreTable th{background:#f2f6f3}.scoreTable td.em{font-weight:900;font-size:14px}
+.scoreSummary{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:10px 0 14px}.scoreSum{background:#f3f7f4;border:1px solid #dce8e0;border-radius:12px;padding:9px 5px;text-align:center}.scoreSum .sl{font-size:10px;color:var(--muted);font-weight:800}.scoreSum .sv{font-size:23px;font-weight:900;margin-top:2px}.holeGrid{display:grid;grid-template-columns:repeat(9,1fr);gap:5px;margin:10px 0 14px}.holeBtn{border:1px solid #cad5ce;background:#fff;border-radius:9px;min-height:38px;padding:2px;font-weight:900;font-size:12px}.holeBtn.done{background:#e3f2e9;color:#0f5132;border-color:#83b39a}.holeBtn.active{background:#0f5132;color:#fff;border-color:#0f5132}.scoreHoleHead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.scoreHoleNo{font-size:28px;font-weight:900}.scoreStepper{display:grid;grid-template-columns:52px 1fr 52px;gap:8px;align-items:center}.scoreValue{font-size:46px;font-weight:900;text-align:center;line-height:1}.scoreMiniGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.seg{display:grid;grid-template-columns:repeat(auto-fit,minmax(42px,1fr));gap:6px}.seg button{min-height:42px;border:1px solid #bdc8c1;background:#fff;border-radius:10px;font-weight:800}.seg button.on{background:#0f5132;color:#fff;border-color:#0f5132}.roundCard{border-top:1px solid #edf0ee;padding:11px 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}.roundCard:first-child{border-top:0}.roundActions{display:flex;gap:6px}.tiny{border:1px solid #bdc8c1;background:#fff;border-radius:9px;min-height:36px;padding:0 9px;font-weight:800}.roundDelete{color:#8d2020;background:#fff5f5;border-color:#e2bcbc}.scoreTableWrap{overflow-x:auto;margin-top:10px}.scoreTable{border-collapse:collapse;width:100%;min-width:640px;font-size:12px}.scoreTable th,.scoreTable td{border:1px solid #d9e1dc;padding:6px;text-align:center}.scoreTable th{background:#f2f6f3}.scoreTable td.em{font-weight:900;font-size:14px}
 .hidden{display:none!important}
 @media(max-width:380px){.big .n{font-size:52px}.nav button{font-size:9px}}
 </style>
@@ -92,10 +92,11 @@
         <div class="field"><label>スコア</label><div class="scoreStepper"><button id="scoreMinus" class="mini">−</button><button id="scoreValue" class="scoreValue" type="button" style="border:0;background:transparent">--</button><button id="scorePlus" class="mini">＋</button></div></div>
         <div class="field"><label for="scorePutts">パット</label><input id="scorePutts" type="number" min="0" max="9" inputmode="numeric" placeholder="--"></div>
       </div>
+      <div class="field"><label for="scoreTeeClub">ティーオフクラブ</label><select id="scoreTeeClub"><option value="">未選択</option></select></div>
       <div class="scoreMiniGrid">
         <div class="field"><label for="scoreOb">OB</label><input id="scoreOb" type="number" min="0" max="9" inputmode="numeric" value="0"></div>
         <div class="field"><label for="scorePenalty">ペナルティ</label><input id="scorePenalty" type="number" min="0" max="9" inputmode="numeric" value="0"></div>
-        <div class="field"><label>FWキープ</label><div id="fwSeg" class="seg"><button data-v="yes">○</button><button data-v="no">×</button></div></div>
+        <div class="field"><label>FWキープ / 方向</label><div id="fwSeg" class="seg"></div></div>
       </div>
       <div class="field"><label>GIR（パーオン）</label><div id="girSeg" class="seg"><button data-v="yes">○</button><button data-v="no">×</button></div></div>
       <div class="field"><label for="scoreMemo">メモ</label><input id="scoreMemo" type="text" maxlength="120" placeholder="例：右ラフ、3パット"></div>
@@ -206,7 +207,7 @@ function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコー�
 function exportCourses(){if(!state.courses.length){toast("バックアップするコースがありません");return}downloadBlob(JSON.stringify({app:"Golf Distance Navi",version:2,exportedAt:new Date().toISOString(),courses:state.courses},null,2),"golf-courses-backup.json","application/json")}
 function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result),a=Array.isArray(d)?d:d.courses;if(!Array.isArray(a))throw new Error();state.courses=a.slice(0,300).map(function(c){return{id:String(c.id||("c"+Date.now()+Math.random())),name:String(c.name||"名称未設定").slice(0,80),source:c.source||{}}});save("gdn_courses",state.courses);state.courseId=state.courses[0]?state.courses[0].id:"";localStorage.setItem("gdn_course_id",state.courseId);renderCourseSelect();toast("コースデータを復元しました")}catch(e){toast("読み込めませんでした")}};r.readAsText(file)}
 function activeRound(){return state.rounds.find(function(r){return String(r.id)===String(state.activeRoundId)})||null}
-function defaultHole(){return{par:4,score:null,putts:null,ob:0,penalty:0,fw:null,gir:null,memo:""}}
+function defaultHole(){return{par:4,score:null,putts:null,ob:0,penalty:0,teeClub:"",fw:null,gir:null,memo:""}}
 function normalizeRound(r){
   if(!Array.isArray(r.holes))r.holes=[];
   while(r.holes.length<18)r.holes.push(defaultHole());
@@ -233,12 +234,41 @@ function calcRound(r){
 function setSeg(id,val){
   document.querySelectorAll("#"+id+" button").forEach(function(b){b.classList.toggle("on",b.dataset.v===val)});
 }
+function renderTeeClubSelect(value){
+  var sel=$("scoreTeeClub");if(!sel)return;
+  var current=value||"",seen=new Set();
+  sel.innerHTML='<option value="">未選択</option>';
+  state.clubs.forEach(function(c){
+    if(seen.has(c))return;seen.add(c);
+    var o=document.createElement("option");o.value=c;o.textContent=c;sel.appendChild(o);
+  });
+  if(current&&!seen.has(current)){
+    var extra=document.createElement("option");extra.value=current;extra.textContent=current;sel.appendChild(extra);
+  }
+  sel.value=current;
+}
+function renderFwSeg(h){
+  var box=$("fwSeg");if(!box)return;box.innerHTML="";
+  var opts=[["hit","〇"],["right","→"],["left","←"]];
+  if(Number(h.par)===3)opts.push(["short","↓"]);
+  opts.forEach(function(o){
+    var b=document.createElement("button");b.type="button";b.dataset.v=o[0];b.textContent=o[1];
+    b.classList.toggle("on",h.fw===o[0]);
+    b.onclick=function(){
+      var cur=holeScoreData();if(!cur)return;
+      cur.fw=cur.fw===o[0]?null:o[0];saveRounds();renderScoreEditor();
+    };
+    box.appendChild(b);
+  });
+}
 function saveScoreEditor(){
   var r=activeRound(),h=holeScoreData();if(!r||!h)return;
   h.par=Math.max(3,Math.min(6,Number($("scorePar").value)||4));
   h.putts=$("scorePutts").value===""?null:Math.max(0,Math.min(9,Number($("scorePutts").value)||0));
   h.ob=Math.max(0,Math.min(9,Number($("scoreOb").value)||0));
   h.penalty=Math.max(0,Math.min(9,Number($("scorePenalty").value)||0));
+  h.teeClub=$("scoreTeeClub").value||"";
+  if(Number(h.par)!==3&&h.fw==="short")h.fw=null;
   h.memo=$("scoreMemo").value.slice(0,120);
   saveRounds();renderScoreSummary();renderScoreGrid();renderScoreTable();renderRoundHistory();
 }
@@ -260,12 +290,18 @@ function renderScoreTable(){
   var r=activeRound(),t=$("scoreTable");if(!r){t.innerHTML="";return}
   function row(label,start,end,key){var x="<tr><th>"+label+"</th>";for(var i=start;i<=end;i++){var h=r.holes[i-1],v=key==="hole"?i:(h[key]==null?"":h[key]);x+="<td"+(key==="score"?' class="em"':"")+">"+v+"</td>"}return x+"</tr>"}
   var c=calcRound(r);
+  function fwMark(v){return v==="hit"?"〇":v==="right"?"→":v==="left"?"←":v==="short"?"↓":""}
+  function customRow(label,start,end,getter){var x="<tr><th>"+label+"</th>";for(var i=start;i<=end;i++)x+="<td>"+getter(r.holes[i-1])+"</td>";return x+"<td></td></tr>"}
   t.innerHTML="<tr><th>HOLE</th>"+Array.from({length:9},function(_,i){return"<th>"+(i+1)+"</th>"}).join("")+"<th>OUT</th></tr>"+
     row("PAR",1,9,"par").replace("</tr>","<td><b>"+r.holes.slice(0,9).reduce(function(a,h){return a+(Number(h.par)||0)},0)+"</b></td></tr>")+
     row("SCORE",1,9,"score").replace("</tr>","<td class=\"em\">"+(c.entered?c.out:"")+"</td></tr>")+
+    customRow("TEE",1,9,function(h){return h.teeClub||""})+
+    customRow("FW",1,9,function(h){return fwMark(h.fw)})+
     "<tr><th>HOLE</th>"+Array.from({length:9},function(_,i){return"<th>"+(i+10)+"</th>"}).join("")+"<th>IN</th></tr>"+
     row("PAR",10,18,"par").replace("</tr>","<td><b>"+r.holes.slice(9).reduce(function(a,h){return a+(Number(h.par)||0)},0)+"</b></td></tr>")+
-    row("SCORE",10,18,"score").replace("</tr>","<td class=\"em\">"+(c.entered>9?c.inn:"")+"</td></tr>");
+    row("SCORE",10,18,"score").replace("</tr>","<td class=\"em\">"+(c.entered>9?c.inn:"")+"</td></tr>")+
+    customRow("TEE",10,18,function(h){return h.teeClub||""})+
+    customRow("FW",10,18,function(h){return fwMark(h.fw)});
 }
 function renderScoreEditor(){
   var r=activeRound(),h=holeScoreData();
@@ -274,7 +310,7 @@ function renderScoreEditor(){
   $("roundTitle").textContent=r.date+" / "+r.courseName+(r.completed?" / 終了":" / ラウンド中");
   $("scoreHoleNo").textContent=state.scoreHole+"H";$("scorePar").value=String(h.par||4);$("scoreValue").textContent=h.score==null?"--":String(h.score);
   $("scorePutts").value=h.putts==null?"":h.putts;$("scoreOb").value=h.ob||0;$("scorePenalty").value=h.penalty||0;$("scoreMemo").value=h.memo||"";
-  setSeg("fwSeg",h.fw);setSeg("girSeg",h.gir);
+  renderTeeClubSelect(h.teeClub||"");renderFwSeg(h);setSeg("girSeg",h.gir);
   $("prevScoreHole").disabled=state.scoreHole<=1;$("nextScoreHole").textContent=state.scoreHole>=18?"18Hまで保存":"次のホール";
   renderScoreSummary();renderScoreGrid();renderScoreTable();
 }
@@ -293,7 +329,7 @@ function finishRound(){
   if(c.entered<18&&!confirm("未入力のホールがあります。このラウンドを終了しますか？"))return;
   r.completed=true;r.completedAt=new Date().toISOString();saveRounds();renderScore();toast("ラウンドを保存しました");
 }
-function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n")}
+function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n");var h=holeScoreData();if($("scoreTeeClub"))renderTeeClubSelect(h&&h.teeClub||"")}
 function updateShot(){$("shotUnit").textContent=ul();$("shotDist").textContent=state.shotStart&&state.current?fmt(hav(state.shotStart,state.current)):"0"}
 function startShot(){if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent="計測中です。ボール位置まで移動してください。";updateShot()}
 function cancelShot(){state.shotStart=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="打つ前に「ショット開始」を押してください。";updateShot()}
@@ -311,8 +347,8 @@ $("startShot").onclick=startShot;$("finishShot").onclick=finishShot;$("cancelSho
 $("newRound").onclick=startRound;$("finishRound").onclick=finishRound;
 $("scoreMinus").onclick=function(){adjustScore(-1)};$("scorePlus").onclick=function(){adjustScore(1)};$("scoreValue").onclick=function(){var h=holeScoreData();if(!h)return;h.score=Number(h.par)||4;saveRounds();renderScoreEditor()};
 $("prevScoreHole").onclick=function(){saveScoreEditor();setScoreHole(state.scoreHole-1)};$("nextScoreHole").onclick=function(){saveScoreEditor();if(state.scoreHole<18)setScoreHole(state.scoreHole+1)};
-["scorePar","scorePutts","scoreOb","scorePenalty","scoreMemo"].forEach(function(id){$(id).addEventListener("change",saveScoreEditor)});
-document.querySelectorAll("#fwSeg button").forEach(function(b){b.onclick=function(){var h=holeScoreData();if(!h)return;h.fw=h.fw===b.dataset.v?null:b.dataset.v;saveRounds();renderScoreEditor()}});
+$("scorePar").addEventListener("change",function(){saveScoreEditor();renderScoreEditor()});
+["scorePutts","scoreOb","scorePenalty","scoreMemo","scoreTeeClub"].forEach(function(id){$(id).addEventListener("change",saveScoreEditor)});
 document.querySelectorAll("#girSeg button").forEach(function(b){b.onclick=function(){var h=holeScoreData();if(!h)return;h.gir=h.gir===b.dataset.v?null:b.dataset.v;saveRounds();renderScoreEditor()}});
 $("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();renderScore();initMap();updateCourseLabel();$("env").textContent="HTTPS: "+(window.isSecureContext?"OK":"NG")+" / GPS API: "+(navigator.geolocation?"OK":"NG")+" / 航空写真: 国土地理院";
 var ios=/iPad|iPhone|iPod/.test(navigator.userAgent),standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;if(ios&&!standalone){$("iosHelp").hidden=false;$("iosHelp").textContent="iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリのように起動できます。"}
