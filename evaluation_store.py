@@ -618,6 +618,33 @@ def _latest_snapshot_id_for_race(hist, date_iso, course, race_no):
     times=q.groupby("snapshot_id")["_dt"].max().sort_values()
     return str(times.index[-1]) if len(times) else ""
 
+def _main_answer_fields(snap):
+    """Return answer-check fields for the saved ◎ horse."""
+    if snap is None or len(snap)==0:
+        return {
+            "◎本命":"","◎着順":"","◎単勝":"判定不可","◎3着内":"判定不可",
+        }
+    q=snap[snap["mark"].astype(str)=="◎"].copy()
+    if q.empty:
+        q=snap.sort_values("rank").head(1).copy()
+    r=q.iloc[0]
+    no=pd.to_numeric(pd.Series([r.get("horse_no")]),errors="coerce").iloc[0]
+    no_text="" if pd.isna(no) else str(int(no))
+    name=str(r.get("horse_name","") or "").strip()
+    main_text=(no_text+" "+name).strip()
+    fi=pd.to_numeric(pd.Series([r.get("actual_finish")]),errors="coerce").iloc[0]
+    if pd.isna(fi):
+        return {
+            "◎本命":main_text,"◎着順":"","◎単勝":"未判定","◎3着内":"未判定",
+        }
+    fi=int(fi)
+    return {
+        "◎本命":main_text,
+        "◎着順":fi,
+        "◎単勝":"的中" if fi==1 else "不的中",
+        "◎3着内":"的中" if fi<=3 else "不的中",
+    }
+
 def settle_day_snapshots(
     backend,
     date_iso,
@@ -700,36 +727,19 @@ def settle_day_snapshots(
             continue
 
         mask=hist["snapshot_id"].astype(str)==sid
-
-        # Old history may already have finish results but no saved ticket plan.
-        # Rebuild tickets only from the frozen prediction values.
-        if ensure_bet_plan_for_snapshot(hist,mask):
-            changed=True
-
         snap=hist.loc[mask].copy()
         actual=pd.to_numeric(snap["actual_finish"],errors="coerce")
         finish_done=int(actual.notna().sum()) >= 3
-        bet_done=(snap["bet_status"].astype(str)=="確定").any()
 
-        # Skip only when BOTH result and payout settlement are complete.
-        if finish_done and bet_done:
-            def _first_num(col):
-                x=pd.to_numeric(snap[col],errors="coerce").dropna()
-                return float(x.iloc[0]) if len(x) else np.nan
-            stake=_first_num("bet_stake")
-            payout=_first_num("bet_payout")
-            profit=_first_num("bet_profit")
-            roi=_first_num("bet_roi")
+        # Answer checking is result-only: no ticket reconstruction or payout/ROI.
+        if finish_done:
+            answer=_main_answer_fields(snap)
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合済み","照合頭数":int(actual.notna().sum()),
-                "購入額":0 if pd.isna(stake) else int(stake),
-                "払戻額":0 if pd.isna(payout) else int(payout),
-                "収支":0 if pd.isna(profit) else int(profit),
-                "回収率":"" if pd.isna(roi) else f"{roi:.1f}%",
-                "馬券結果":str(snap["bet_status"].iloc[0]),
+                **answer,
                 "取得元":"保存済み",
-                "メッセージ":"着順・払戻とも照合済みです。",
+                "メッセージ":"着順を照合済みです。",
             })
             continue
 
@@ -780,19 +790,12 @@ def settle_day_snapshots(
                 })
                 continue
 
-            bet=apply_bet_settlement(hist,mask,result,now)
             changed=True
+            answer=_main_answer_fields(hist.loc[mask])
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合完了","照合頭数":final_matched,
-                "購入額":bet.get("stake",0),
-                "払戻額":bet.get("payout",0),
-                "収支":bet.get("profit",0),
-                "回収率":(
-                    "" if pd.isna(bet.get("roi",np.nan))
-                    else f"{float(bet.get('roi')):.1f}%"
-                ),
-                "馬券結果":bet.get("status",""),
+                **answer,
                 "取得元":result.get("source",""),
                 "メッセージ":"",
             })
@@ -811,6 +814,12 @@ def settle_day_snapshots(
 
     report=pd.DataFrame(rows)
     counts=report["状態"].value_counts().to_dict() if len(report) else {}
+    evaluated=report[
+        report["状態"].isin(["照合完了","照合済み"])
+    ].copy() if len(report) else pd.DataFrame()
+    win_hits=int((evaluated.get("◎単勝",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
+    top3_hits=int((evaluated.get("◎3着内",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
+    evaluated_races=int(len(evaluated))
     return {
         "date":date_iso,
         "total":int(len(report)),
@@ -818,6 +827,11 @@ def settle_day_snapshots(
         "already":int(counts.get("照合済み",0)),
         "failed":int(counts.get("未公開・取得失敗",0)+counts.get("取得失敗",0)),
         "no_prediction":int(counts.get("予想履歴なし",0)),
+        "evaluated_races":evaluated_races,
+        "main_win_hits":win_hits,
+        "main_top3_hits":top3_hits,
+        "main_win_rate":win_hits/evaluated_races if evaluated_races else np.nan,
+        "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
         "report":report,
     }
 
@@ -842,11 +856,10 @@ def evaluation_metrics(history):
     h=settled_latest(history)
     if h.empty:
         return {
-            "races":0,"horses":0,"main_win_rate":np.nan,"main_top3_rate":np.nan,
+            "races":0,"horses":0,
+            "main_win_hits":0,"main_top3_hits":0,
+            "main_win_rate":np.nan,"main_top3_rate":np.nan,
             "brier_win":np.nan,"brier_top3":np.nan,"log_loss":np.nan,
-            "approx_main_roi":np.nan,
-            "bet_races":0,"bet_stake":0,"bet_payout":0,"bet_profit":0,
-            "bet_roi":np.nan,
         },h
 
     for c in ["win_prob","top3_prob","actual_win","actual_top3","odds"]:
@@ -859,35 +872,15 @@ def evaluation_metrics(history):
     winner=h[h["actual_win"]==1]
     ll=float((-np.log(winner["win_prob"].clip(eps,1))).mean()) if len(winner) else np.nan
 
-    approx=np.nan
-    if len(main):
-        odds=main["odds"]
-        valid=odds.notna()
-        if valid.any():
-            returns=(main.loc[valid,"actual_win"].fillna(0)*odds[valid]*100).sum()
-            approx=float(returns/(int(valid.sum())*100)*100)
-
-    bets=h.sort_values("recorded_at").drop_duplicates("snapshot_id",keep="last").copy()
-    bets["bet_stake"]=pd.to_numeric(bets["bet_stake"],errors="coerce")
-    bets["bet_payout"]=pd.to_numeric(bets["bet_payout"],errors="coerce")
-    exact=bets[
-        (bets["bet_status"].astype(str)=="確定") &
-        bets["bet_stake"].notna() & (bets["bet_stake"]>0)
-    ]
-    bet_stake=int(exact["bet_stake"].sum()) if len(exact) else 0
-    bet_payout=int(exact["bet_payout"].fillna(0).sum()) if len(exact) else 0
-    bet_profit=bet_payout-bet_stake
-    bet_roi=(bet_payout/bet_stake*100.0) if bet_stake else np.nan
-
     return {
         "races":races,"horses":int(len(h)),
+        "main_win_hits":int(pd.to_numeric(main["actual_win"],errors="coerce").fillna(0).sum()) if len(main) else 0,
+        "main_top3_hits":int(pd.to_numeric(main["actual_top3"],errors="coerce").fillna(0).sum()) if len(main) else 0,
         "main_win_rate":float(main["actual_win"].mean()) if len(main) else np.nan,
         "main_top3_rate":float(main["actual_top3"].mean()) if len(main) else np.nan,
         "brier_win":float(np.mean((wp-h["actual_win"])**2)),
         "brier_top3":float(np.mean((tp-h["actual_top3"])**2)),
-        "log_loss":ll,"approx_main_roi":approx,
-        "bet_races":int(len(exact)),"bet_stake":bet_stake,
-        "bet_payout":bet_payout,"bet_profit":bet_profit,"bet_roi":bet_roi,
+        "log_loss":ll,
     },h
 def mark_summary(history):
     h=settled_latest(history)
