@@ -27,6 +27,7 @@
 .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:900;width:min(760px,100%);display:grid;grid-template-columns:repeat(5,1fr);background:#fffffff2;border-top:1px solid var(--line);padding:7px 4px calc(7px + var(--bottom));backdrop-filter:blur(12px)}.nav button{border:0;background:transparent;color:#67756d;min-height:54px;font-size:10px;font-weight:800;display:grid;justify-items:center;align-content:center;gap:2px;border-radius:12px}.nav button span{font-size:19px}.nav button.active{color:var(--g);background:#e9f3ed}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}.dot{width:18px;height:18px;border-radius:50%;background:#1576d4;border:3px solid #fff;box-shadow:0 0 0 2px #1576d44d}.gmark{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:900;border:2px solid #fff;box-shadow:0 1px 5px #0007}.gf{background:#348a57}.gc{background:#0f5132}.gb{background:#123a29}
 .hidden{display:none!important}
+.osmresults{display:grid;gap:8px;margin-top:10px}.osmrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px;border:1px solid #e1e7e3;border-radius:12px;background:#fff}.osmrow.selected{border-color:#6fa386;background:#f0f7f3}.osmmsg{margin-top:10px}.osmmsg.okmsg{background:#eef7f1;border-color:#cfe5d6;color:#174d31}.osmmsg.errmsg{background:#fff0f0;border-color:#efcdcd;color:#8d2020}.sourceNote{font-size:11px;line-height:1.5;color:var(--muted);margin-top:10px}
 @media(max-width:380px){.big .n{font-size:48px}.greenBox .val{font-size:22px}.grid3{grid-template-columns:1fr}.nav button{font-size:9px}}
 </style>
 </head>
@@ -57,6 +58,16 @@
 
 <main class="content">
 <section id="course" class="screen active">
+  <div class="panel">
+    <h2>実在ゴルフ場を検索</h2>
+    <p class="help">OpenStreetMapの公開データからゴルフ場を検索し、ホール番号・PAR・グリーン位置を取得します。登録状況によって取得できるホール数や地点数は異なります。</p>
+    <div class="field"><label for="osmQuery">ゴルフ場名</label><input id="osmQuery" type="search" enterkeyhint="search" autocomplete="off" placeholder="例：〇〇カントリークラブ 栃木"></div>
+    <div class="grid"><button id="osmSearch" class="btn">検索</button><button id="osmImport" class="btn2" style="margin:0" disabled>選択コースを取込</button></div>
+    <div id="osmSelected" class="meta" style="margin-top:8px"></div>
+    <div id="osmMsg" class="notice osmmsg" hidden></div>
+    <div id="osmResults" class="osmresults"></div>
+    <div class="sourceNote">検索・コースデータ：© OpenStreetMap contributors。検索はボタン操作時のみ行い、結果は端末内にキャッシュします。自動取得できない地点は下の手動登録で補正できます。</div>
+  </div>
   <div class="panel">
     <div class="head"><h2>コース</h2><button id="newCourse" class="link">＋追加</button></div>
     <div class="field"><label for="courseSelect">登録コース</label><select id="courseSelect"><option value="">コースを選択</option></select></div>
@@ -134,7 +145,7 @@ function persistCourses(){save("gdn_courses",state.courses)}
 function initMap(){
  if(typeof L==="undefined"){gpsStatus("地図読込失敗","err");toast("地図ライブラリを読み込めませんでした");return}
  state.map=L.map("map",{zoomControl:false}).setView([36.5,139.9],6);
- L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"&copy; OpenStreetMap contributors"}).addTo(state.map);
+ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"&copy; OpenStreetMap contributors"}).addTo(state.map);
  L.control.zoom({position:"topleft"}).addTo(state.map);
  state.map.on("click",function(e){
    var p={lat:e.latlng.lat,lng:e.latlng.lng};
@@ -278,7 +289,7 @@ function renderCourse(){
  $("courseTools").classList.toggle("hidden",!c);$("courseEmpty").classList.toggle("hidden",!!c);
  $("courseBar").classList.toggle("show",!!c);$("freeRange").classList.toggle("hidden",!!c);
  if(!c){cancelEditPoint();renderGreenMarkers();updateCourseDistances();return}
- $("courseBarName").textContent=c.name;$("courseBarHole").textContent=state.hole+"H";
+ $("courseBarName").textContent=c.name;$("courseBarHole").textContent=state.hole+"H"+(h&&h.par?" / PAR "+h.par:"");
  ["front","center","back"].forEach(function(type){
    var p=h&&cleanPoint(h[type]),id=type+"Status";
    $(id).textContent=p?(p.lat.toFixed(6)+", "+p.lng.toFixed(6)):"未登録";
@@ -362,5 +373,6 @@ if("serviceWorker" in navigator&&window.isSecureContext)navigator.serviceWorker.
 setTimeout(startGps,350);
 })();
 </script>
+<script src="./osm-import.js"></script>
 </body>
 </html>
