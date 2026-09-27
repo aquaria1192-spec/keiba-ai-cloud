@@ -156,7 +156,7 @@ async function focusSelectedCourse(){
  var c=currentCourse();if(!c||!state.map){toast("コースを選択してください");return}
  var p=courseCenter(c);
  if(!p){
-   try{var r=await fetch("./golf-courses-index.json",{cache:"no-store"}),d=await r.json(),a=Array.isArray(d)?d:d.courses||[],n=function(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\s　・･\-_/()（）]/g,"")},q=n(c.name),h=a.find(function(x){return Number.isFinite(Number(x.lat))&&Number.isFinite(Number(x.lon))&&(n(x.name)===q||n(x.name).indexOf(q)>=0||q.indexOf(n(x.name))>=0)});if(h){p={lat:Number(h.lat),lng:Number(h.lon)};c.source=c.source||{};c.source.courseCenter=p;save("gdn_courses",state.courses)}}catch(e){}
+   try{var r=await fetch("./golf-courses-index.json",{cache:"no-store"}),d=await r.json(),a=Array.isArray(d)?d:d.courses||[],n=function(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\s　・･\-_/()（）]/g,"")},q=n((c.source&&c.source.officialName)||c.name),h=a.find(function(x){return Number.isFinite(Number(x.lat))&&Number.isFinite(Number(x.lon))&&(n(x.name)===q||n(x.name).indexOf(q)>=0||q.indexOf(n(x.name))>=0)});if(h){p={lat:Number(h.lat),lng:Number(h.lon)};c.source=c.source||{};c.source.courseCenter=p;save("gdn_courses",state.courses)}}catch(e){}
  }
  if(p)state.map.setView([p.lat,p.lng],17);else toast("このコースの位置情報がありません");
 }
