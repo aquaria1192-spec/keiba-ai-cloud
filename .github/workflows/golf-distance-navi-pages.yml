@@ -27,6 +27,98 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Build local golf course search index
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.parse, urllib.request
+
+          out_path = "golf-distance-navi/golf-courses-index.json"
+          seed_path = "golf-distance-navi/golf-courses-seed.json"
+
+          seed = []
+          if os.path.exists(seed_path):
+              try:
+                  with open(seed_path, "r", encoding="utf-8") as f:
+                      seed = json.load(f)
+              except Exception:
+                  seed = []
+
+          query = """[out:json][timeout:90];
+          nwr(20.0,122.0,46.0,154.0)["leisure"="golf_course"];
+          out tags center;"""
+          url = "https://overpass-api.de/api/interpreter?" + urllib.parse.urlencode({"data": query})
+
+          raw = None
+          for attempt in range(3):
+              try:
+                  req = urllib.request.Request(
+                      url,
+                      headers={
+                          "User-Agent": "GolfDistanceNavi/1.0 (GitHub Pages build)",
+                          "Accept": "application/json",
+                      },
+                  )
+                  with urllib.request.urlopen(req, timeout=120) as r:
+                      raw = json.load(r)
+                  break
+              except Exception as e:
+                  print("Overpass attempt", attempt + 1, "failed:", e)
+                  time.sleep(5 * (attempt + 1))
+
+          items = []
+          if raw:
+              for e in raw.get("elements", []):
+                  tags = e.get("tags") or {}
+                  center = e.get("center") or {}
+                  lat = e.get("lat", center.get("lat"))
+                  lon = e.get("lon", center.get("lon"))
+                  names = {
+                      "name": tags.get("name", ""),
+                      "name:ja": tags.get("name:ja", ""),
+                      "official_name": tags.get("official_name", ""),
+                      "alt_name": tags.get("alt_name", ""),
+                      "short_name": tags.get("short_name", ""),
+                      "old_name": tags.get("old_name", ""),
+                  }
+                  name = next((v for v in names.values() if v), "")
+                  if not name:
+                      continue
+                  if "ゴルフ練習場" in name or "driving range" in name.lower():
+                      continue
+                  items.append({
+                      "osm_type": e.get("type", ""),
+                      "osm_id": e.get("id"),
+                      "lat": lat,
+                      "lon": lon,
+                      "name": name,
+                      "names": names,
+                      "addr": {
+                          "prefecture": tags.get("addr:province") or tags.get("addr:state") or "",
+                          "city": tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village") or "",
+                      },
+                  })
+
+          def key(x):
+              return (str(x.get("osm_type", "")), str(x.get("osm_id", "")), x.get("name", ""))
+
+          merged = {}
+          for x in seed + items:
+              k = key(x)
+              merged[k] = x
+
+          final = sorted(merged.values(), key=lambda x: (x.get("name") or "").casefold())
+          with open(out_path, "w", encoding="utf-8") as f:
+              json.dump(
+                  {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "courses": final},
+                  f,
+                  ensure_ascii=False,
+                  separators=(",", ":"),
+              )
+
+          print("Golf course index entries:", len(final))
+          PY
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
@@ -38,5 +130,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-# Redeploy triggered after GitHub Pages was enabled.
