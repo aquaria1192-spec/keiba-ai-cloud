@@ -50,7 +50,7 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -58,6 +58,7 @@ jobs:
           from model_compare import _calibrate_histgb_probabilities
           import automation_runner
           import online_learning
+          import evaluation_store
 
           assert _race_no_int_safe("1R") == 1
           assert _race_no_int_safe("01R") == 1
@@ -114,6 +115,45 @@ jobs:
           assert app.index("online_adapter=load_online_adapter()") < app.index(
               "if online_adapter is not None:"
           )
+
+          # Betting recommendations / ROI must stay removed from the live UI.
+          assert "馬券の買い方" not in app
+          assert "買い目" not in app
+          assert "回収率" not in app
+          assert "race_bet_plan" not in app
+          assert "plan_to_json" not in app
+
+          runner=Path("automation_runner.py").read_text(encoding="utf-8")
+          assert "race_bet_plan" not in runner
+          assert "apply_bet_settlement" not in runner
+          assert "backfill_missing_bet_plans" not in runner
+
+          store_src=Path("evaluation_store.py").read_text(encoding="utf-8")
+          assert "from betting_tools" not in store_src
+          assert "from payout_tools" not in store_src
+          assert "def race_roi_summary" not in store_src
+          assert "def apply_bet_settlement" not in store_src
+          assert not Path("betting_tools.py").exists()
+          assert not Path("payout_tools.py").exists()
+
+          sample=pd.DataFrame([
+              {"snapshot_id":"r1","recorded_at":"2026-09-27T10:00:00+09:00","date":"2026-09-27","course":"中山","race_no":"1R","horse_no":1,"horse_name":"A","mark":"◎","rank":1,"win_prob":0.45,"top3_prob":0.80,"actual_finish":1,"actual_win":1,"actual_top3":1,"snapshot_type":"course_batch"},
+              {"snapshot_id":"r1","recorded_at":"2026-09-27T10:00:00+09:00","date":"2026-09-27","course":"中山","race_no":"1R","horse_no":2,"horse_name":"B","mark":"○","rank":2,"win_prob":0.30,"top3_prob":0.60,"actual_finish":2,"actual_win":0,"actual_top3":1,"snapshot_type":"course_batch"},
+              {"snapshot_id":"r1","recorded_at":"2026-09-27T10:00:00+09:00","date":"2026-09-27","course":"中山","race_no":"1R","horse_no":3,"horse_name":"C","mark":"▲","rank":3,"win_prob":0.25,"top3_prob":0.50,"actual_finish":3,"actual_win":0,"actual_top3":1,"snapshot_type":"course_batch"},
+              {"snapshot_id":"r2","recorded_at":"2026-09-27T10:30:00+09:00","date":"2026-09-27","course":"中山","race_no":"2R","horse_no":4,"horse_name":"D","mark":"◎","rank":1,"win_prob":0.40,"top3_prob":0.75,"actual_finish":2,"actual_win":0,"actual_top3":1,"snapshot_type":"course_batch"},
+              {"snapshot_id":"r2","recorded_at":"2026-09-27T10:30:00+09:00","date":"2026-09-27","course":"中山","race_no":"2R","horse_no":5,"horse_name":"E","mark":"○","rank":2,"win_prob":0.35,"top3_prob":0.65,"actual_finish":1,"actual_win":1,"actual_top3":1,"snapshot_type":"course_batch"},
+              {"snapshot_id":"r2","recorded_at":"2026-09-27T10:30:00+09:00","date":"2026-09-27","course":"中山","race_no":"2R","horse_no":6,"horse_name":"F","mark":"▲","rank":3,"win_prob":0.25,"top3_prob":0.45,"actual_finish":4,"actual_win":0,"actual_top3":0,"snapshot_type":"course_batch"},
+          ])
+          sample=evaluation_store.norm_history(sample)
+          metrics,_=evaluation_store.evaluation_metrics(sample)
+          assert metrics["races"] == 2
+          assert metrics["main_win_hits"] == 1
+          assert abs(metrics["main_win_rate"]-0.5) < 1e-12
+          assert metrics["main_top3_hits"] == 2
+          assert abs(metrics["main_top3_rate"]-1.0) < 1e-12
+          answer=evaluation_store._main_answer_fields(sample[sample["snapshot_id"]=="r1"])
+          assert answer["◎単勝"] == "的中"
+          assert answer["◎3着内"] == "的中"
           print("Regression smoke checks OK")
           PY
 

@@ -40,6 +40,9 @@ def mark_label(mark):
         "×":"低評価",
     }.get(str(mark), "")
 
+def mark_legend():
+    return "◎本命　○対抗　▲単穴　△連下　☆穴　注注意　×低評価"
+
 def race_display(row):
     rno = str(row.get("race_no",""))
     name = str(row.get("race_name","")).strip()
