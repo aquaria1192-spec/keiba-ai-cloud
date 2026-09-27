@@ -49,7 +49,7 @@ jobs:
                   seed = []
 
           query = """[out:json][timeout:90];
-          nwr(20.0,122.0,46.0,154.0)["leisure"="golf_course"];
+          nwr["leisure"="golf_course"](20.0,122.0,46.0,154.0);
           out tags center;"""
           url = "https://overpass-api.de/api/interpreter?" + urllib.parse.urlencode({"data": query})
 
