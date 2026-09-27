@@ -448,9 +448,24 @@ def parse_public_race_condition_html(html: str, race_id: str, source_url="") -> 
         "source_url":source_url,
     }
 
+def _race_no_int_safe(v, default=None):
+    m=re.search(r"\d+",str(v or ""))
+    if not m:
+        return default
+    try:
+        return int(m.group(0))
+    except Exception:
+        return default
+
 def _race_id_for_course_no(target_date,course,race_no):
+    wanted=_race_no_int_safe(race_no)
+    if wanted is None:
+        return ""
     for rid in all_known_race_ids(target_date):
-        if VENUE_CODE.get(str(rid)[4:6],"")==str(course) and int(str(rid)[-2:])==int(race_no):
+        if (
+            VENUE_CODE.get(str(rid)[4:6],"")==str(course)
+            and int(str(rid)[-2:])==wanted
+        ):
             return rid
     return ""
 
@@ -471,8 +486,12 @@ def fetch_public_live_contexts(
     chosen={course:{} for course in wanted}
     for item in pairs:
         try:
-            course,race_no,surface=str(item[0]),int(item[1]),str(item[2])
+            course=str(item[0])
+            race_no=_race_no_int_safe(item[1])
+            surface=str(item[2])
         except Exception:
+            continue
+        if race_no is None:
             continue
         if course not in chosen or surface not in ("芝","ダート"):
             continue
@@ -866,12 +885,22 @@ def fetch_same_day_bias(
     session=None,
 ) -> dict:
     s=session or _session()
+    current_no=_race_no_int_safe(current_race_no)
+    if current_no is None:
+        return {
+            "sample_races":0,"sample_horses":0,
+            "inside_top3_rate":np.nan,"outside_top3_rate":np.nan,
+            "front_top3_rate":np.nan,"closer_top3_rate":np.nan,
+            "jockey_day":{},
+            "summary":"レース番号を解析できず、当日バイアスを計算できません",
+            "source_urls":[],
+        }
     prior=[]
     for rid,url in (entry_url_map or {}).items():
         if VENUE_CODE.get(rid[4:6],"") != course:
             continue
         rn=int(rid[-2:])
-        if rn < int(current_race_no):
+        if rn < current_no:
             prior.append((rn,rid,url))
     prior.sort()
 

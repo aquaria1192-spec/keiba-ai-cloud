@@ -30,7 +30,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.9.1",
+    page_title="競馬予想AI Cloud Ver.1.9.2",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -87,8 +87,18 @@ def fetch_context_cached(
 @st.cache_data(ttl=90, show_spinner=False)
 def fetch_bias_cached(date_iso, course, race_no, surface, official_items):
     official=dict(official_items)
+    rn=race_num(race_no)
+    if rn==999:
+        return {
+            "summary":"レース番号を解析できないため当日バイアスなし",
+            "sample_races":0,
+            "sample_horses":0,
+            "gate_adjustments":{},
+            "style_adjustments":{},
+            "jockey_adjustments":{},
+        }
     return fetch_same_day_bias(
-        pd.Timestamp(date_iso).date(),course,int(race_no),surface,official
+        pd.Timestamp(date_iso).date(),course,rn,surface,official
     )
 
 def pct(v):
@@ -242,7 +252,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.9.1")
+st.title("🏇 競馬予想AI Cloud Ver.1.9.2")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
 
 st.markdown("""
@@ -300,8 +310,13 @@ with st.container(border=True):
                     .copy()
                 )
                 race_surface_pairs=tuple(
-                    (str(r["course"]),int(r["race_no"]),str(r["surface"]))
+                    (
+                        str(r["course"]),
+                        race_num(r["race_no"]),
+                        str(r["surface"])
+                    )
                     for _,r in rsp.iterrows()
+                    if race_num(r["race_no"]) != 999
                 )
                 contexts=fetch_context_cached(
                     target_date.isoformat(),courses,official_items,race_surface_pairs
@@ -320,7 +335,7 @@ with st.container(border=True):
 
             # 当日データを取り直したら、開催地一括予想も必ず作り直す。
             st.session_state["cloud_course_prediction_cache"]={}
-            st.session_state.pop("_saved_fp_191",None)
+            st.session_state.pop("_saved_fp_192",None)
 
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
@@ -595,15 +610,15 @@ with st.container(border=True):
                     )
                 )
 
-                if st.session_state.get("_saved_fp_191") != fingerprint:
+                if st.session_state.get("_saved_fp_192") != fingerprint:
                     try:
                         si=save_prediction_if_new(
                             history_backend,
                             detail,
-                            "1.9.1"
+                            "1.9.2"
                         )
                         st.session_state[
-                            "_saved_fp_191"
+                            "_saved_fp_192"
                         ]=fingerprint
                         if si.get("saved"):
                             st.caption(
@@ -887,7 +902,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.9.1の自己評価について"):
+with st.expander("Ver.1.9.2の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -897,7 +912,7 @@ with st.expander("Ver.1.9.1の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.9.1の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.9.2の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
