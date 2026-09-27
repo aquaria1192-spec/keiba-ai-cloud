@@ -305,7 +305,7 @@ function renderCourse(){
  $("courseTools").classList.toggle("hidden",!c);$("courseEmpty").classList.toggle("hidden",!!c);
  $("courseBar").classList.toggle("show",!!c);$("freeRange").classList.toggle("hidden",!!c);
  if(!c){cancelEditPoint();renderGreenMarkers();updateCourseDistances();return}
- $("courseBarName").textContent=c.name;$("courseBarHole").textContent=state.hole+"H"+(h&&h.par?" / PAR "+h.par:"");
+ $("courseBarName").textContent=c.name;$("courseBarHole").textContent=state.hole+"H"+(h&&h.par?" / PAR "+h.par:"")+(h&&h.regYards?" / REG "+h.regYards+"yd":"");
  ["front","center","back"].forEach(function(type){
    var p=h&&cleanPoint(h[type]),id=type+"Status";
    $(id).textContent=p?(p.lat.toFixed(6)+", "+p.lng.toFixed(6)):"未登録";
