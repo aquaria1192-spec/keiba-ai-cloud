@@ -3,6 +3,29 @@ import pandas as pd
 import numpy as np
 from ml_engine import train_models, predict, available_models, model_label
 
+# Ver.1.12 probability calibration.
+# Parameters were fitted on the 2024 proxy-year holdout only and then frozen.
+# The untouched 2025 proxy-year holdout is used as the adoption check.
+WIN_PROB_POWER = 2.0654155666646536
+TOP3_LOGIT_SLOPE = 1.0117893511357146
+TOP3_LOGIT_INTERCEPT = -1.2759957435674174
+CALIBRATION_VERSION = "proxy2024-platt-v1"
+
+def _calibrate_histgb_probabilities(win_prob, top3_prob):
+    p1=pd.to_numeric(win_prob,errors="coerce").fillna(0).clip(1e-9,1.0)
+    p1=np.power(p1,WIN_PROB_POWER)
+    total=float(p1.sum())
+    p1=p1/total if total>0 else pd.Series(
+        np.full(len(p1),1/max(len(p1),1)),index=p1.index
+    )
+
+    p3=pd.to_numeric(top3_prob,errors="coerce").fillna(0.0).clip(1e-6,1-1e-6)
+    logit=np.log(p3/(1-p3))
+    z=np.clip(TOP3_LOGIT_SLOPE*logit+TOP3_LOGIT_INTERCEPT,-40,40)
+    p3=1/(1+np.exp(-z))
+    p3=np.maximum(p3,p1)
+    return pd.Series(p1,index=win_prob.index),pd.Series(p3,index=top3_prob.index)
+
 def compare_models(history, model_keys):
     rows = []
     trained = {}
@@ -100,6 +123,7 @@ def ensemble_predict(entries, trained_models, weights):
     merged["top3_prob"] = 0.0
 
     used_weight = 0.0
+    used_models = []
     for key, p in preds.items():
         w = float(weights.get(key, 0))
         if w <= 0:
@@ -113,6 +137,7 @@ def ensemble_predict(entries, trained_models, weights):
         merged["win_prob"] += merged[f"win_prob_{key}"].fillna(0) * w
         merged["top3_prob"] += merged[f"top3_prob_{key}"].fillna(0) * w
         used_weight += w
+        used_models.append(key)
 
     if used_weight <= 0:
         raise ValueError("有効な重みがありません。")
@@ -124,7 +149,18 @@ def ensemble_predict(entries, trained_models, weights):
     if total > 0:
         merged["win_prob"] = merged["win_prob"] / total
 
-    merged["top3_prob"] = np.maximum(merged["top3_prob"], merged["win_prob"])
+    # The static calibration was validated for the production HistGB-only
+    # package. Do not silently apply it to a future multi-model ensemble.
+    if len(used_models)==1 and used_models[0]=="histgb":
+        merged["win_prob"],merged["top3_prob"]=_calibrate_histgb_probabilities(
+            merged["win_prob"],merged["top3_prob"]
+        )
+        merged["probability_calibration"]=CALIBRATION_VERSION
+    else:
+        merged["top3_prob"] = np.maximum(
+            merged["top3_prob"], merged["win_prob"]
+        )
+        merged["probability_calibration"]="none"
     max_win = max(float(merged["win_prob"].max()), 1e-9)
     recent = pd.to_numeric(merged.get("recent_top3_rate"), errors="coerce").fillna(0).clip(0,1)
     merged["ai_index"] = np.clip(
