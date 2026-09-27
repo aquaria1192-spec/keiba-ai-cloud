@@ -1,16 +1,21 @@
-# Cloud Ver.1.9.2 更新手順
+# Cloud Ver.1.10 更新手順
 
 GitHub `keiba-ai-cloud` の main ブランチへ以下を上書きしてください。
 
 - streamlit_app.py
-- race_day_context.py
+- evaluation_store.py
 - README.md
 - CLOUD_DEPLOY手順.md
 
-Commit changes 後、必要なら
-`Manage app → Reboot app`
-を実行してください。
+Commit changes 後、必要なら `Manage app → Reboot app` を実行してください。
 
-その後「最新データに更新」を押します。
+## 使用手順
 
-`1R` 形式のレース番号でも当日データ・馬場状態を正常に取得できるようになります。
+1. 「最新データに更新」
+2. 開催地を選択
+3. 全レース一括予想が完了するまで待つ
+4. `答え合わせ用として一括予想 ○R を固定保存しました` を確認
+5. レース詳細は必要なレースを選んで閲覧
+6. 結果公開後「この日の全レースをまとめて答え合わせ」
+
+答え合わせでは `course_batch` が最優先されます。

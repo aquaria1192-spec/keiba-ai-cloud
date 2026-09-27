@@ -19,8 +19,9 @@ from race_day_context import (
     collect_official_entry_urls
 )
 from payout_tools import (
-    parse_jra_payouts_html, settle_plan, ticket_results_to_json
+    parse_jra_payouts_html, settle_plan, ticket_results_to_json, plan_to_json
 )
+from betting_tools import race_bet_plan
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
@@ -192,7 +193,7 @@ def numtext(v):
     x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
     return "" if pd.isna(x) else f"{float(x):.8f}"
 
-def prediction_snapshot(detail,app_version="1.7.1"):
+def prediction_snapshot(detail,app_version="1.10"):
     if detail is None or len(detail)==0:
         return blank_history()
 
@@ -211,6 +212,7 @@ def prediction_snapshot(detail,app_version="1.7.1"):
             numtext(r.get("top3_prob")),numtext(r.get("ai_index")),
             numtext(r.get("odds")),numtext(r.get("body_weight")),
             str(r.get("going","")),
+            str(r.get("snapshot_type","manual")),
             str(r.get("bet_style","")),str(r.get("bet_budget","")),
             str(r.get("bet_plan_json","")),
         ]))
@@ -249,7 +251,7 @@ def prediction_snapshot(detail,app_version="1.7.1"):
         })
     return norm_history(pd.DataFrame(rows))
 
-def save_prediction_if_new(backend,detail,app_version="1.7.1"):
+def save_prediction_if_new(backend,detail,app_version="1.10"):
     snap=prediction_snapshot(detail,app_version)
     if snap.empty:
         return {"saved":False,"message":"予想データなし"}
@@ -260,6 +262,89 @@ def save_prediction_if_new(backend,detail,app_version="1.7.1"):
     out=pd.concat([hist,snap],ignore_index=True)
     backend.save(out)
     return {"saved":True,"message":"記録しました","snapshot_id":sid}
+
+def save_course_batch_predictions(
+    backend,
+    detail,
+    app_version="1.10",
+    snapshot_type="course_batch",
+):
+    """
+    Save all races produced by one venue-level batch prediction.
+
+    One race = one immutable evaluation snapshot. If a course_batch snapshot
+    for that date/course/race already exists, it is not replaced. This keeps
+    answer checking tied to the first venue-wide batch prediction rather than
+    to a later race-detail selection.
+
+    The history backend is written only once for the whole venue.
+    """
+    if detail is None or len(detail)==0:
+        return {
+            "saved_races":0,"existing_races":0,"saved_rows":0,
+            "message":"一括予想データなし",
+        }
+
+    d=detail.copy()
+    # Normalize source column names used by prediction_snapshot.
+    if "開催日" not in d and "date" in d:
+        d["開催日"]=d["date"]
+    if "競馬場" not in d and "course" in d:
+        d["競馬場"]=d["course"]
+    if "レース" not in d and "race_no" in d:
+        d["レース"]=d["race_no"]
+
+    d["snapshot_type"]=snapshot_type
+    d["auto_generated"]=False
+
+    hist=backend.load()
+    hist=norm_history(hist)
+
+    existing=set()
+    if len(hist):
+        h=hist[hist["snapshot_type"].astype(str)==snapshot_type].copy()
+        for _,r in h[["date","course","race_no"]].drop_duplicates().iterrows():
+            existing.add((
+                str(r["date"]),
+                str(r["course"]),
+                str(r["race_no"]).replace("R",""),
+            ))
+
+    new=[]
+    existing_count=0
+    group_cols=["開催日","競馬場","レース"]
+    for (_,_,_),g in d.groupby(group_cols,sort=False,dropna=False):
+        f=g.iloc[0]
+        key=(
+            str(f.get("開催日","")),
+            str(f.get("競馬場","")),
+            str(f.get("レース","")).replace("R",""),
+        )
+        if key in existing:
+            existing_count+=1
+            continue
+        snap=prediction_snapshot(g,app_version)
+        if len(snap):
+            new.append(snap)
+            existing.add(key)
+
+    if not new:
+        return {
+            "saved_races":0,
+            "existing_races":existing_count,
+            "saved_rows":0,
+            "message":"一括予想はすでに答え合わせ用に保存済みです。",
+        }
+
+    out=pd.concat([hist]+new,ignore_index=True)
+    out=out.drop_duplicates(["snapshot_id","horse_no"],keep="last")
+    backend.save(out)
+    return {
+        "saved_races":len(new),
+        "existing_races":existing_count,
+        "saved_rows":int(sum(len(x) for x in new)),
+        "message":f"一括予想 {len(new)}R を答え合わせ用に固定保存しました。",
+    }
 
 def generic_result_parse(html):
     payout_info=parse_jra_payouts_html(html)
@@ -370,6 +455,63 @@ def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_m
         f" 詳細: {detail}"
     )
 
+def ensure_bet_plan_for_snapshot(
+    hist, mask, style="標準", budget_yen=2000
+):
+    """
+    Backfill tickets for older Ver.1.7/1.6 snapshots.
+
+    IMPORTANT:
+    The plan is reconstructed only from the prediction values already frozen
+    in the saved snapshot. Race results/payouts are not used to choose tickets.
+    """
+    snap=hist.loc[mask].copy()
+    if snap.empty:
+        return False
+
+    existing=""
+    for v in snap["bet_plan_json"].astype(str):
+        if v.strip() and v.strip() not in ("nan","[]"):
+            existing=v.strip()
+            break
+    if existing:
+        return False
+
+    detail=snap.copy()
+    detail["順位"]=pd.to_numeric(detail["rank"],errors="coerce")
+    detail["印"]=detail["mark"].astype(str)
+    detail["horse_no"]=pd.to_numeric(detail["horse_no"],errors="coerce")
+    detail["win_prob"]=pd.to_numeric(detail["win_prob"],errors="coerce")
+    detail["top3_prob"]=pd.to_numeric(detail["top3_prob"],errors="coerce")
+    detail["ai_index"]=pd.to_numeric(detail["ai_index"],errors="coerce")
+    detail["odds"]=pd.to_numeric(detail["odds"],errors="coerce")
+
+    # Recreate expected_value if it can be recovered from the frozen odds.
+    detail["expected_value"]=detail["win_prob"]*detail["odds"]
+
+    # Fall back to AI index order if old rank is missing.
+    if detail["順位"].isna().all():
+        detail=detail.sort_values("ai_index",ascending=False).copy()
+        detail["順位"]=np.arange(1,len(detail)+1)
+
+    try:
+        plan,meta=race_bet_plan(
+            detail,
+            style=style,
+            budget_yen=budget_yen,
+        )
+    except Exception:
+        return False
+
+    if plan is None or len(plan)==0:
+        return False
+
+    pj=plan_to_json(plan)
+    hist.loc[mask,"bet_style"]=style
+    hist.loc[mask,"bet_budget"]=int(meta.get("予算",budget_yen))
+    hist.loc[mask,"bet_plan_json"]=pj
+    return True
+
 def apply_bet_settlement(hist,mask,result,settled_at):
     snap=hist.loc[mask]
     if snap.empty:
@@ -465,6 +607,13 @@ def _latest_snapshot_id_for_race(hist, date_iso, course, race_no):
     ].copy()
     if q.empty:
         return ""
+
+    # User-facing venue-wide batch prediction is the answer-check baseline.
+    # Other snapshots are retained only as fallback when no batch snapshot exists.
+    pri={"course_batch":4,"pre_race":3,"morning":2,"manual":1}
+    q["_pri"]=q["snapshot_type"].astype(str).map(pri).fillna(0)
+    best=q["_pri"].max()
+    q=q[q["_pri"]==best].copy()
     q["_dt"]=pd.to_datetime(q["recorded_at"],errors="coerce")
     times=q.groupby("snapshot_id")["_dt"].max().sort_values()
     return str(times.index[-1]) if len(times) else ""
@@ -484,7 +633,7 @@ def settle_day_snapshots(
       iterable of (course, race_no). When supplied, races with no saved
       prediction are included in the report as "予想履歴なし".
 
-    Only the latest saved prediction snapshot for each race is evaluated.
+    The course_batch snapshot is evaluated first; other prediction types are fallback only.
     The history file is saved once after the entire day is processed.
     """
     hist=backend.load()
@@ -551,11 +700,19 @@ def settle_day_snapshots(
             continue
 
         mask=hist["snapshot_id"].astype(str)==sid
+
+        # Old history may already have finish results but no saved ticket plan.
+        # Rebuild tickets only from the frozen prediction values.
+        if ensure_bet_plan_for_snapshot(hist,mask):
+            changed=True
+
         snap=hist.loc[mask].copy()
         actual=pd.to_numeric(snap["actual_finish"],errors="coerce")
+        finish_done=int(actual.notna().sum()) >= 3
+        bet_done=(snap["bet_status"].astype(str)=="確定").any()
 
-        # Already completely/meaningfully settled.
-        if int(actual.notna().sum()) >= 3:
+        # Skip only when BOTH result and payout settlement are complete.
+        if finish_done and bet_done:
             def _first_num(col):
                 x=pd.to_numeric(snap[col],errors="coerce").dropna()
                 return float(x.iloc[0]) if len(x) else np.nan
@@ -572,7 +729,7 @@ def settle_day_snapshots(
                 "回収率":"" if pd.isna(roi) else f"{roi:.1f}%",
                 "馬券結果":str(snap["bet_status"].iloc[0]),
                 "取得元":"保存済み",
-                "メッセージ":"すでに答え合わせ済みです。",
+                "メッセージ":"着順・払戻とも照合済みです。",
             })
             continue
 
@@ -609,10 +766,15 @@ def settle_day_snapshots(
                 hist.at[idx,"result_url"]=result.get("result_url","")
                 matched+=1
 
-            if matched < 3:
+            final_matched=int(
+                pd.to_numeric(
+                    hist.loc[mask,"actual_finish"],errors="coerce"
+                ).notna().sum()
+            )
+            if final_matched < 3:
                 rows.append({
                     "競馬場":course,"レース":race_no,
-                    "状態":"取得失敗","照合頭数":matched,
+                    "状態":"取得失敗","照合頭数":final_matched,
                     "取得元":result.get("source",""),
                     "メッセージ":"結果は取得できましたが、予想との照合数が不足しています。",
                 })
@@ -622,7 +784,7 @@ def settle_day_snapshots(
             changed=True
             rows.append({
                 "競馬場":course,"レース":race_no,
-                "状態":"照合完了","照合頭数":matched,
+                "状態":"照合完了","照合頭数":final_matched,
                 "購入額":bet.get("stake",0),
                 "払戻額":bet.get("payout",0),
                 "収支":bet.get("profit",0),
@@ -665,7 +827,7 @@ def settled_latest(history):
     h=h[h["actual_finish_num"].notna()].copy()
     if h.empty:
         return h
-    pri={"pre_race":3,"morning":2,"manual":1}
+    pri={"course_batch":4,"pre_race":3,"morning":2,"manual":1}
     h["_pri"]=h["snapshot_type"].map(pri).fillna(0)
     h["_dt"]=pd.to_datetime(h["recorded_at"],errors="coerce")
     racecols=["date","course","race_no"]

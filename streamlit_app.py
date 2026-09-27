@@ -18,7 +18,8 @@ from race_day_context import (
     fetch_same_day_bias, apply_day_adjustments
 )
 from evaluation_store import (
-    HistoryBackend, save_prediction_if_new, settle_day_snapshots,
+    HistoryBackend, save_prediction_if_new, save_course_batch_predictions,
+    settle_day_snapshots,
     evaluation_metrics, mark_summary, condition_summary,
     calibration_summary, training_candidate_csv,
     race_roi_summary, daily_roi_summary, bet_type_roi_summary,
@@ -30,7 +31,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.9.2",
+    page_title="競馬予想AI Cloud Ver.1.10",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -183,7 +184,7 @@ def show_day_context(contexts):
             if not valid:
                 st.warning("JRA馬場情報が予想日と一致していないため、この値はAIの馬場状態には上書きしていません。")
 
-def show_prediction(detail, context, bias):
+def show_prediction(detail, context, bias, fixed_style=None, fixed_budget=None):
     rg=detail.sort_values("順位").copy()
     label=str(rg.iloc[0].get("レース表示",""))
     st.subheader(label)
@@ -221,14 +222,25 @@ def show_prediction(detail, context, bias):
     st.dataframe(q,use_container_width=True,hide_index=True)
 
     st.markdown("#### 馬券の買い方")
-    c1,c2=st.columns(2)
-    with c1:
-        style=st.selectbox("買い方",["堅実","標準","攻め"],index=1,key="cloud_bet_style")
-    with c2:
-        budget=st.number_input(
-            "このレースの予算（円）",min_value=500,max_value=50000,
-            value=2000,step=100,key="cloud_bet_budget"
+    if fixed_style is not None:
+        style=str(fixed_style)
+        budget=int(fixed_budget or 2000)
+        st.caption(
+            f"答え合わせ用に固定した一括予想の買い目："
+            f"**{style} / 1レース {budget:,}円**"
         )
+    else:
+        c1,c2=st.columns(2)
+        with c1:
+            style=st.selectbox(
+                "買い方",["堅実","標準","攻め"],index=1,
+                key="cloud_bet_style"
+            )
+        with c2:
+            budget=st.number_input(
+                "このレースの予算（円）",min_value=500,max_value=50000,
+                value=2000,step=100,key="cloud_bet_budget"
+            )
     plan,meta=race_bet_plan(rg,style=style,budget_yen=int(budget))
     st.write(f"**AI上位評価の差：{meta['信頼度']}**　{meta['コメント']}")
     if len(plan):
@@ -252,7 +264,7 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
-st.title("🏇 競馬予想AI Cloud Ver.1.9.2")
+st.title("🏇 競馬予想AI Cloud Ver.1.10")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・回収率集計")
 
 st.markdown("""
@@ -335,7 +347,7 @@ with st.container(border=True):
 
             # 当日データを取り直したら、開催地一括予想も必ず作り直す。
             st.session_state["cloud_course_prediction_cache"]={}
-            st.session_state.pop("_saved_fp_192",None)
+            st.session_state.pop("_saved_fp_110",None)
 
             st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
@@ -417,6 +429,15 @@ with st.container(border=True):
             key="cloud_use_day_adjustment"
         )
 
+        # All races in a venue use the same fixed ticket policy so ROI and
+        # answer checking exactly match the venue-wide batch prediction.
+        batch_bet_style="標準"
+        batch_bet_budget=2000
+        st.caption(
+            f"答え合わせ用の一括買い目：**{batch_bet_style} / "
+            f"1レース {batch_bet_budget:,}円**"
+        )
+
         cache=st.session_state.setdefault(
             "cloud_course_prediction_cache",{}
         )
@@ -424,6 +445,8 @@ with st.container(border=True):
             str(date_iso),
             str(course),
             bool(use_day_adjustment),
+            batch_bet_style,
+            int(batch_bet_budget),
         )
 
         if cache_key not in cache:
@@ -467,6 +490,21 @@ with st.container(border=True):
                             bias,
                             enabled=use_day_adjustment
                         )
+
+                        # Freeze the prediction AND the ticket plan at venue-batch time.
+                        plan,plan_meta=race_bet_plan(
+                            rd,
+                            style=batch_bet_style,
+                            budget_yen=batch_bet_budget,
+                        )
+                        rd["snapshot_type"]="course_batch"
+                        rd["auto_generated"]=False
+                        rd["bet_style"]=batch_bet_style
+                        rd["bet_budget"]=int(
+                            plan_meta.get("予算",batch_bet_budget)
+                        )
+                        rd["bet_plan_json"]=plan_to_json(plan)
+
                         adjusted_parts.append(rd)
                         bias_map[race_key]=bias
 
@@ -506,10 +544,31 @@ with st.container(border=True):
                     )
                     course_summary=pd.DataFrame(summary_rows)
 
+                    batch_save={
+                        "saved_races":0,"existing_races":0,"saved_rows":0,
+                        "message":"",
+                    }
+                    if len(all_detail):
+                        try:
+                            batch_save=save_course_batch_predictions(
+                                history_backend,
+                                all_detail,
+                                "1.10",
+                                snapshot_type="course_batch",
+                            )
+                        except Exception as save_ex:
+                            batch_save={
+                                "saved_races":0,"existing_races":0,
+                                "saved_rows":0,
+                                "message":f"一括予想履歴を保存できませんでした：{save_ex}",
+                                "error":True,
+                            }
+
                     cache[cache_key]={
                         "detail":all_detail,
                         "summary":course_summary,
                         "bias_map":bias_map,
+                        "batch_save":batch_save,
                     }
                     st.session_state[
                         "cloud_course_prediction_cache"
@@ -531,6 +590,18 @@ with st.container(border=True):
                 f"✅ {course}競馬場の{len(races)}レースを一括予想しました。"
                 " レースを切り替えても再計算しません。"
             )
+            batch_save=result.get("batch_save") or {}
+            if batch_save.get("error"):
+                st.warning(batch_save.get("message","一括予想履歴の保存に失敗しました。"))
+            elif batch_save.get("saved_races",0)>0:
+                st.success(
+                    f"📝 答え合わせ用として一括予想 "
+                    f"{batch_save.get('saved_races',0)}R を固定保存しました。"
+                )
+            elif batch_save.get("existing_races",0)>0:
+                st.caption(
+                    "📝 この開催地の一括予想は、すでに答え合わせ用として固定保存済みです。"
+                )
 
             st.markdown("#### 全レース一括予想")
             if len(course_summary):
@@ -584,12 +655,13 @@ with st.container(border=True):
                 shown_plan,shown_meta=show_prediction(
                     detail,
                     context,
-                    bias
+                    bias,
+                    fixed_style=batch_bet_style,
+                    fixed_budget=batch_bet_budget,
                 )
-                detail["bet_style"]=shown_meta.get("スタイル","")
-                detail["bet_budget"]=shown_meta.get("予算",0)
-                detail["bet_plan_json"]=plan_to_json(shown_plan)
 
+                # The selected race is display-only. Answer checking uses the
+                # already-fixed venue-wide course_batch snapshot.
                 fingerprint=(
                     date_iso,
                     str(course),
@@ -610,24 +682,11 @@ with st.container(border=True):
                     )
                 )
 
-                if st.session_state.get("_saved_fp_192") != fingerprint:
-                    try:
-                        si=save_prediction_if_new(
-                            history_backend,
-                            detail,
-                            "1.9.2"
-                        )
-                        st.session_state[
-                            "_saved_fp_192"
-                        ]=fingerprint
-                        if si.get("saved"):
-                            st.caption(
-                                "📝 このレースの予想を評価履歴へ記録しました。"
-                            )
-                    except Exception as ex:
-                        st.warning(
-                            f"予想履歴を保存できませんでした：{ex}"
-                        )
+                st.session_state["_saved_fp_110"]=fingerprint
+                st.caption(
+                    "答え合わせは、レース選択時の表示ではなく、"
+                    "開催地を選んだ時点で固定保存した一括予想を使用します。"
+                )
 
             except Exception as e:
                 st.error(
@@ -657,6 +716,7 @@ with st.container(border=True):
     auto_history=load_public_auto_history()
     history=merge_histories(manual_history,auto_history)
     saved_day_races=0
+    batch_day_races=0
     auto_day_races=0
     if settle_date and len(auto_history):
         ah=auto_history[auto_history["date"].astype(str)==settle_date]
@@ -668,16 +728,21 @@ with st.container(border=True):
         saved_day_races=int(
             hday[["course","race_no"]].drop_duplicates().shape[0]
         )
+        batch_day_races=int(
+            hday[hday["snapshot_type"].astype(str)=="course_batch"]
+            [["course","race_no"]].drop_duplicates().shape[0]
+        )
 
     st.write(
         f"対象日：**{settle_date or '-'}**　／　"
         f"当日レース：**{len(expected_races)}R**　／　"
-        f"保存済み予想：**{saved_day_races}R**　／　自動レース前予想：**{auto_day_races}R**"
+        f"一括予想保存：**{batch_day_races}R**　／　"
+        f"自動レース前予想：**{auto_day_races}R**"
     )
     st.caption(
-        "1回押すだけで、その日の全レースを順番に確認します。"
-        " 自動レース前予想はGitHub Actionsでも17:30頃に自動答え合わせされます。"
-        "結果未公開のレースは飛ばし、予想履歴がないレースも一覧で確認できます。"
+        "答え合わせは **開催地ごとに固定保存した一括予想を最優先** で使用します。"
+        " 一括予想がないレースだけ、発走前自動予想 → 朝予想 → 手動予想の順で補完します。"
+        " 結果未公開のレースは飛ばします。"
     )
 
     bulk_clicked=st.button(
@@ -685,7 +750,7 @@ with st.container(border=True):
         type="primary",
         use_container_width=True,
         disabled=not bool(settle_date),
-        key="bulk_settle_day_162"
+        key="bulk_settle_day_110"
     )
 
     if bulk_clicked:
@@ -706,7 +771,7 @@ with st.container(border=True):
                 progress_callback=_bulk_progress,
             )
             progress.progress(1.0,text="1日分の答え合わせが完了しました。")
-            st.session_state["bulk_settle_result_162"]=result
+            st.session_state["bulk_settle_result_110"]=result
             st.success(
                 f"{result['total']}R確認："
                 f"新規照合 {result['completed']}R／"
@@ -718,7 +783,7 @@ with st.container(border=True):
             progress.empty()
             st.error(f"1日まとめて答え合わせできませんでした：{ex}")
 
-    bulk_result=st.session_state.get("bulk_settle_result_162")
+    bulk_result=st.session_state.get("bulk_settle_result_110")
     if bulk_result and bulk_result.get("date")==settle_date:
         with st.expander("全レースの答え合わせ結果",expanded=True):
             rep=bulk_result.get("report")
@@ -902,7 +967,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.9.2の自己評価について"):
+with st.expander("Ver.1.10の自己評価について"):
     st.write(
         "レース1つごとにAIモデルを自動更新することはしません。"
         "少数データへの過学習を避けるため、まず予想確率と実結果を蓄積します。"
@@ -912,7 +977,7 @@ with st.expander("Ver.1.9.2の自己評価について"):
         "時系列検証付きで再学習します。"
     )
     st.caption(
-        "Ver.1.9.2の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
+        "Ver.1.10の自動レース前予想は、同じリポジトリの prediction-history ブランチへ"
         "GitHub Actionsが保存します。mainブランチを更新しないため、予想保存のたびに"
         "Streamlitアプリが再デプロイされることはありません。"
     )
