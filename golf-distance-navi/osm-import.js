@@ -3,7 +3,7 @@
 
 var NOMINATIM="https://nominatim.openstreetmap.org/search";
 var OVERPASS="https://overpass-api.de/api/interpreter";
-var CACHE_KEY="gdn_osm_search_cache_v5";
+var CACHE_KEY="gdn_osm_search_cache_v6";
 var LAST_KEY="gdn_osm_search_last_v1";
 var results=[];
 var selected=null;
@@ -224,6 +224,24 @@ function directMatchScore(p,q){
   });
   return best;
 }
+async function searchNominatimNameOnly(q){
+  var variants=[q,q+" ゴルフ場",q+" カントリークラブ"],m=new Map();
+  for(var i=0;i<variants.length;i++){
+    var last=Number(localStorage.getItem(LAST_KEY)||0),wait=1100-(Date.now()-last);
+    if(wait>0)await sleep(wait);
+    localStorage.setItem(LAST_KEY,String(Date.now()));
+    var url=NOMINATIM+"?format=jsonv2&limit=12&countrycodes=jp&layer=poi&addressdetails=1&extratags=1&namedetails=1&accept-language=ja&q="+encodeURIComponent(variants[i]);
+    var resp=await fetch(url,{headers:{"Accept":"application/json"}});
+    if(!resp.ok)continue;
+    var raw=await resp.json();
+    (Array.isArray(raw)?raw:[]).forEach(function(p){
+      if(isGolfCourse(p)&&nameContains(p,q))m.set(osmKey(p),p);
+    });
+    if(m.size>=8)break;
+  }
+  return Array.from(m.values());
+}
+
 function resultLabel(p){
   var name=(p.name||String(p.display_name||"").split(",")[0]||"名称不明").trim();
   var parts=String(p.display_name||"").split(",").map(function(x){return x.trim()}).filter(Boolean);
@@ -269,6 +287,11 @@ async function search(){
     }
 
     results=await searchGolfNameContains(q);
+    if(!results.length){
+      var fallbackResults=[];
+      try{fallbackResults=await searchNominatimNameOnly(q)}catch(fallbackErr){console.warn(fallbackErr)}
+      results=results.concat(fallbackResults);
+    }
     results=results.filter(function(p){return isGolfCourse(p)&&nameContains(p,q)})
       .sort(function(a,b){return directMatchScore(b,q)-directMatchScore(a,q)})
       .slice(0,30);
