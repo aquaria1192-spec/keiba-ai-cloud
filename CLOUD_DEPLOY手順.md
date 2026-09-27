@@ -1,4 +1,4 @@
-# Cloud Ver.1.9 更新手順
+# Cloud Ver.1.9.1 更新手順
 
 GitHub `keiba-ai-cloud` の main ブランチへ以下を上書きしてください。
 
@@ -6,19 +6,16 @@ GitHub `keiba-ai-cloud` の main ブランチへ以下を上書きしてくだ�
 - README.md
 - CLOUD_DEPLOY手順.md
 
-その他のVer.1.8.2ファイルはそのまま使用できます。
+Commit changes 後、Streamlitを開いてください。
 
-## 更新後
+必要なら
+`Manage app → Reboot app`
+を実行します。
 
-1. Commit changes
-2. Streamlitが自動更新
-3. 必要なら Manage app → Reboot app
-4. 「最新データに更新」
-5. 開催地を選択
+起動後は最初に
+「最新データに更新」
+を押してください。
 
-中山を選択した場合は、
-「中山競馬場の全レースを一括予想しています…」
-と表示されたあと、全レース一覧が表示されます。
-
-一覧の下の「詳細を見るレース」を変更すると、
-選択したレースの全頭予想・買い目へ切り替わります。
+その後、
+開催地 → 全レース一括予想 → レース詳細選択
+の順で使用できます。
