@@ -176,10 +176,10 @@ function drawShotHistory(){
  if(!state.map||!state.shotLayer)return;
  state.shotLayer.clearLayers();
  var count=0;
- if(state.showShotHistory){
+ if(state.showShotHistory&&state.courseId){
    state.history.slice().reverse().forEach(function(r){
      if(!validPoint(r.start)||!validPoint(r.end))return;
-     if(state.courseId&&r.courseId!==state.courseId)return;
+     if(r.courseId!==state.courseId)return;
      var line=L.polyline([[Number(r.start.lat),Number(r.start.lng)],[Number(r.end.lat),Number(r.end.lng)]],{weight:4,opacity:.8});
      line.bindTooltip((r.club||"")+" "+fmt(Number(r.meters))+ul(),{sticky:true});
      line.addTo(state.shotLayer);
