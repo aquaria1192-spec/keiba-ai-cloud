@@ -23,7 +23,7 @@
 .osmresults{display:grid;gap:8px;margin-top:10px}.osmrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px;border:1px solid #e1e7e3;border-radius:12px;background:#fff}.osmrow.selected{border-color:#6fa386;background:#f0f7f3}.main{font-weight:800}.meta{font-size:12px;color:var(--muted);margin-top:3px}.osmmsg{margin-top:10px}.osmmsg.okmsg{background:#eef7f1;border-color:#cfe5d6;color:#174d31}.osmmsg.errmsg{background:#fff0f0;border-color:#efcdcd;color:#8d2020}
 .distanceHero{text-align:center;padding:6px 0 14px}.cap{font-size:12px;color:var(--muted);font-weight:800}.big{display:flex;align-items:baseline;justify-content:center;gap:5px;font-weight:900;line-height:1}.big .n{font-size:62px}.big .u{font-size:20px}.sub{font-size:13px;color:var(--muted);margin-top:5px}
 .mapwrap{position:relative;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#ddd}#map{height:58vh;min-height:360px;max-height:650px}.mapbtns{position:absolute;right:10px;bottom:10px;z-index:500;display:flex;gap:8px}.mapbtn{border:1px solid #0002;background:#fff;padding:0 12px}
-.recommendBox{background:#f2f7f4;border:1px solid #d8e6dd;border-radius:14px;padding:12px;margin:0 0 12px}.recommendTitle{font-size:12px;color:var(--muted);font-weight:800}.recommendMain{font-size:24px;font-weight:900;margin-top:3px}.recommendAlt{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.recommendChip{border:1px solid #cbd9d0;background:#fff;border-radius:999px;padding:6px 9px;font-size:12px;font-weight:800}.mapOption{display:flex;align-items:center;gap:9px;margin-top:10px;font-size:13px;font-weight:800}.mapOption input{width:21px;height:21px}.historyCount{font-size:12px;color:var(--muted);margin-left:auto}.shot{text-align:center;padding:12px 0 18px}.shot .n{font-size:62px}.stats,.history{display:grid;gap:8px}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #edf0ee}.row:first-child{border-top:0}.dist{font-weight:800;font-size:18px;white-space:nowrap}.del{border:0;background:#f5eded;color:#8d2020;border-radius:9px;padding:7px 9px;margin-left:8px}
+.recommendBox{background:#f2f7f4;border:1px solid #d8e6dd;border-radius:14px;padding:12px;margin:0 0 12px}.recommendTitle{font-size:12px;color:var(--muted);font-weight:800}.recommendMain{font-size:24px;font-weight:900;margin-top:3px}.recommendAlt{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.recommendChip{border:1px solid #cbd9d0;background:#fff;border-radius:999px;padding:6px 9px;font-size:12px;font-weight:800}.mapOption{display:flex;align-items:center;gap:9px;margin-top:10px;font-size:13px;font-weight:800}.mapOption input{width:21px;height:21px}.historyCount{font-size:12px;color:var(--muted);margin-left:auto}.shot{text-align:center;padding:12px 0 18px}.shot .n{font-size:62px}.stats,.history{display:grid;gap:8px}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #edf0ee}.shotRowActions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.editBtn{border:1px solid #b8c5bd;background:#fff;color:#26352d;border-radius:9px;padding:7px 9px;font-weight:800}.editShotCoords{display:grid;grid-template-columns:1fr 1fr;gap:8px}.coordBox{background:#f5f8f6;border:1px solid #dce5df;border-radius:12px;padding:10px}.coordBox .meta{word-break:break-all}.editActions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.row:first-child{border-top:0}.dist{font-weight:800;font-size:18px;white-space:nowrap}.del{border:0;background:#f5eded;color:#8d2020;border-radius:9px;padding:7px 9px;margin-left:8px}
 .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:900;width:min(760px,100%);display:grid;grid-template-columns:repeat(3,1fr);background:#fffffff2;border-top:1px solid var(--line);padding:7px 4px calc(7px + var(--bottom));backdrop-filter:blur(12px)}.nav button{border:0;background:transparent;color:#67756d;min-height:54px;font-size:11px;font-weight:800;display:grid;justify-items:center;align-content:center;gap:2px;border-radius:12px}.nav button span{font-size:20px}.nav button.active{color:var(--g);background:#e9f3ed}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .dot{width:20px;height:20px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 0 0 3px #1976d247}.targetDot{width:24px;height:24px;border-radius:50%;background:#e53935;border:4px solid #fff;box-shadow:0 1px 6px #0006}.hidden{display:none!important}
@@ -65,6 +65,17 @@
   </div>
   <div class="panel"><div class="head"><h2>クラブ別飛距離</h2><button id="csv" class="link">CSV</button></div><div id="stats" class="stats"></div></div>
   <div class="panel"><div class="head"><h2>ショット履歴</h2><button id="clearHistory" class="link danger">全削除</button></div><div id="history" class="history"></div></div>
+  <div id="shotEditPanel" class="panel hidden">
+    <div class="head"><h2>ショット修正</h2><button id="editShotClose" class="link">閉じる</button></div>
+    <div class="field"><label for="editShotCourse">コース</label><select id="editShotCourse"></select></div>
+    <div class="field"><label for="editShotClub">クラブ</label><select id="editShotClub"></select></div>
+    <div class="field"><label for="editShotDistance">飛距離（<span id="editShotUnit">yd</span>）</label><input id="editShotDistance" type="number" min="0" step="1" inputmode="decimal"></div>
+    <div class="editShotCoords">
+      <div class="coordBox"><div class="main">開始地点</div><div id="editShotStartText" class="meta">位置情報なし</div><button id="editShotStartHere" class="btn2" style="margin-top:8px">開始地点を現在地</button></div>
+      <div class="coordBox"><div class="main">終了地点</div><div id="editShotEndText" class="meta">位置情報なし</div><button id="editShotEndHere" class="btn2" style="margin-top:8px">終了地点を現在地</button></div>
+    </div>
+    <div class="editActions"><button id="editShotCancel" class="btn2">キャンセル</button><button id="editShotSave" class="btn">修正を保存</button></div>
+  </div>
   <div class="panel">
     <h2>ショット設定</h2>
     <div class="field"><label for="unit">距離単位</label><select id="unit"><option value="yd">ヤード</option><option value="m">メートル</option></select></div>
@@ -111,7 +122,7 @@
 (function(){
 "use strict";
 var YD=0.9144,defaults=["Driver","3W","5W","4UT","5UT","5I","6I","7I","8I","9I","PW","AW","SW"];
-var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotLayer:null,shotStart:null,watch:null,prompt:null,showShotHistory:localStorage.getItem("gdn_show_shot_history")!=="0",continuousShot:localStorage.getItem("gdn_continuous_shot")!=="0",unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
+var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotLayer:null,shotStart:null,editShotId:null,editShotDraft:null,watch:null,prompt:null,showShotHistory:localStorage.getItem("gdn_show_shot_history")!=="0",continuousShot:localStorage.getItem("gdn_continuous_shot")!=="0",unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
 function $(id){return document.getElementById(id)}
 function load(k,d){try{var v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}}
 function save(k,v){localStorage.setItem(k,JSON.stringify(v))}
@@ -248,7 +259,73 @@ function finishShot(){
    cancelShot();
  }
 }
-function renderRecords(){var s=$("stats"),h=$("history");s.innerHTML="";h.innerHTML="";if(!state.history.length){s.innerHTML='<div class="empty">まだショット記録がありません。</div>';h.innerHTML='<div class="empty">ショットを計測するとここに保存されます。</div>';return}var g={};state.history.forEach(function(r){(g[r.club]||(g[r.club]=[])).push(r.meters)});Object.keys(g).forEach(function(club){var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length,mx=Math.max.apply(null,a),r=document.createElement("div");r.className="row";r.innerHTML='<div><div class="main">'+club+'</div><div class="meta">'+a.length+'球 / 最大 '+fmt(mx)+ul()+'</div></div><div class="dist">'+fmt(avg)+ul()+'</div>';s.appendChild(r)});state.history.slice(0,80).forEach(function(x){var c=state.courses.find(function(v){return v.id===x.courseId}),r=document.createElement("div"),l=document.createElement("div"),rr=document.createElement("div"),d=document.createElement("span"),b=document.createElement("button");r.className="row";l.innerHTML='<div class="main">'+x.club+'</div><div class="meta">'+new Date(x.at).toLocaleString("ja-JP")+(c?" / "+c.name:"")+'</div>';d.className="dist";d.textContent=fmt(x.meters)+ul();b.className="del";b.textContent="削除";b.onclick=function(){state.history=state.history.filter(function(v){return v.id!==x.id});save("gdn_history",state.history);renderRecords()};rr.append(d,b);r.append(l,rr);h.appendChild(r)});drawShotHistory();if(state.current&&state.target)renderClubRecommendation(hav(state.current,state.target))}
+function editDistanceFromMeters(m){return state.unit==="yd"?Number(m)/YD:Number(m)}
+function metersFromEditDistance(v){v=Number(v);return state.unit==="yd"?v*YD:v}
+function coordText(p){return validPoint(p)?Number(p.lat).toFixed(6)+", "+Number(p.lng).toFixed(6):"位置情報なし"}
+function renderShotEdit(){
+ var panel=$("shotEditPanel");if(!panel)return;
+ var x=state.history.find(function(r){return String(r.id)===String(state.editShotId)});
+ if(!x){panel.classList.add("hidden");state.editShotId=null;state.editShotDraft=null;return}
+ panel.classList.remove("hidden");
+ var draft=state.editShotDraft||(state.editShotDraft={
+   club:x.club||"",
+   courseId:x.courseId||"",
+   meters:Number(x.meters)||0,
+   start:validPoint(x.start)?{lat:Number(x.start.lat),lng:Number(x.start.lng)}:null,
+   end:validPoint(x.end)?{lat:Number(x.end.lat),lng:Number(x.end.lng)}:null
+ });
+ var cs=$("editShotCourse");cs.innerHTML='<option value="">コース未設定</option>';state.courses.forEach(function(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.name;cs.appendChild(o)});cs.value=draft.courseId||"";
+ var club=$("editShotClub");club.innerHTML="";var clubs=state.clubs.slice();if(draft.club&&clubs.indexOf(draft.club)<0)clubs.unshift(draft.club);clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;club.appendChild(o)});club.value=draft.club||clubs[0]||"";
+ $("editShotUnit").textContent=ul();$("editShotDistance").value=(Math.round(editDistanceFromMeters(draft.meters)*10)/10).toString();
+ $("editShotStartText").textContent=coordText(draft.start);$("editShotEndText").textContent=coordText(draft.end);
+}
+function openShotEdit(id){
+ var x=state.history.find(function(r){return String(r.id)===String(id)});if(!x)return;
+ state.editShotId=x.id;state.editShotDraft=null;renderShotEdit();
+ setTimeout(function(){$("shotEditPanel").scrollIntoView({behavior:"smooth",block:"start"})},50);
+}
+function closeShotEdit(){state.editShotId=null;state.editShotDraft=null;$("shotEditPanel").classList.add("hidden")}
+function recalcEditShotDistance(){
+ var d=state.editShotDraft;if(!d||!validPoint(d.start)||!validPoint(d.end))return;
+ d.meters=hav(d.start,d.end);$("editShotDistance").value=(Math.round(editDistanceFromMeters(d.meters)*10)/10).toString();
+}
+function setEditShotPoint(kind){
+ if(!state.current){toast("先にGPSを取得してください");startGps();return}
+ if(!state.editShotDraft)return;
+ state.editShotDraft[kind]={lat:Number(state.current.lat),lng:Number(state.current.lng)};
+ recalcEditShotDistance();renderShotEdit();
+ toast((kind==="start"?"開始地点":"終了地点")+"を現在地に修正しました");
+}
+function saveShotEdit(){
+ var x=state.history.find(function(r){return String(r.id)===String(state.editShotId)}),d=state.editShotDraft;if(!x||!d)return;
+ var dist=Number($("editShotDistance").value);if(!Number.isFinite(dist)||dist<=0){toast("飛距離を入力してください");return}
+ x.club=$("editShotClub").value||x.club;x.courseId=$("editShotCourse").value||"";x.meters=metersFromEditDistance(dist);
+ x.start=d.start?{lat:Number(d.start.lat),lng:Number(d.start.lng)}:null;x.end=d.end?{lat:Number(d.end.lat),lng:Number(d.end.lng)}:null;
+ save("gdn_history",state.history);closeShotEdit();renderRecords();updateTarget();toast("ショット記録を修正しました");
+}
+function renderRecords(){
+ var stats=$("stats"),hist=$("history");stats.innerHTML="";hist.innerHTML="";
+ if(!state.history.length){
+   stats.innerHTML='<div class="empty">まだショット記録がありません。</div>';
+   hist.innerHTML='<div class="empty">ショットを計測するとここに保存されます。</div>';
+   drawShotHistory();renderShotEdit();return;
+ }
+ var g={};
+ state.history.forEach(function(r){var m=Number(r.meters);if(!r.club||!Number.isFinite(m))return;(g[r.club]||(g[r.club]=[])).push(m)});
+ Object.keys(g).forEach(function(club){
+   var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length,mx=Math.max.apply(null,a),row=document.createElement("div");
+   row.className="row";row.innerHTML='<div><div class="main">'+club+'</div><div class="meta">'+a.length+'球 / 最大 '+fmt(mx)+ul()+'</div></div><div class="dist">'+fmt(avg)+ul()+'</div>';stats.appendChild(row);
+ });
+ state.history.slice(0,80).forEach(function(x){
+   var c=state.courses.find(function(v){return v.id===x.courseId}),row=document.createElement("div"),left=document.createElement("div"),actions=document.createElement("div"),dist=document.createElement("span"),edit=document.createElement("button"),del=document.createElement("button");
+   row.className="row";left.innerHTML='<div class="main">'+x.club+'</div><div class="meta">'+new Date(x.at).toLocaleString("ja-JP")+(c?" / "+c.name:"")+'</div>';
+   actions.className="shotRowActions";dist.className="dist";dist.textContent=fmt(x.meters)+ul();
+   edit.className="editBtn";edit.textContent="修正";edit.onclick=function(){openShotEdit(x.id)};
+   del.className="del";del.textContent="削除";del.onclick=function(){if(confirm("このショットを削除しますか？")){state.history=state.history.filter(function(v){return v.id!==x.id});save("gdn_history",state.history);if(String(state.editShotId)===String(x.id))closeShotEdit();renderRecords()}};
+   actions.append(dist,edit,del);row.append(left,actions);hist.appendChild(row);
+ });
+ drawShotHistory();renderShotEdit();if(state.current&&state.target)renderClubRecommendation(hav(state.current,state.target));
+}
 function saveSettings(){state.unit=$("unit").value;localStorage.setItem("gdn_unit",state.unit);var a=$("clubEdit").value.split(/\r?\n/).map(function(x){return x.trim()}).filter(Boolean);if(!a.length){toast("クラブを1つ以上入力してください");return}state.clubs=Array.from(new Set(a));save("gdn_clubs",state.clubs);renderClubs();updateTarget();updateShot();renderRecords();toast("設定を保存しました")}
 function exportCsv(){if(!state.history.length){toast("出力する記録がありません");return}var rows=[["日時","コース","クラブ","距離(m)","距離(yd)","GPS精度(m)"]];state.history.forEach(function(r){var c=state.courses.find(function(v){return v.id===r.courseId});rows.push([new Date(r.at).toLocaleString("ja-JP"),c?c.name:"",r.club,r.meters.toFixed(1),(r.meters/YD).toFixed(1),r.accuracy==null?"":Math.round(r.accuracy)])});var q=function(v){return '"'+String(v).replaceAll('"','""')+'"'};downloadBlob("\ufeff"+rows.map(function(r){return r.map(q).join(",")}).join("\r\n"),"golf-shot-history.csv","text/csv;charset=utf-8")}
 function downloadBlob(content,name,type){var blob=new Blob([content],{type:type}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}
@@ -265,7 +342,12 @@ $("continuousShot").checked=state.continuousShot;
 $("continuousShot").onchange=function(){state.continuousShot=this.checked;localStorage.setItem("gdn_continuous_shot",this.checked?"1":"0");toast(this.checked?"連続ショット計測をONにしました":"連続ショット計測をOFFにしました")};
 $("showShotHistory").checked=state.showShotHistory;
 $("showShotHistory").onchange=function(){state.showShotHistory=this.checked;localStorage.setItem("gdn_show_shot_history",this.checked?"1":"0");drawShotHistory()};
-$("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);renderRecords()}};
+$("editShotClose").onclick=closeShotEdit;$("editShotCancel").onclick=closeShotEdit;$("editShotSave").onclick=saveShotEdit;
+$("editShotStartHere").onclick=function(){setEditShotPoint("start")};$("editShotEndHere").onclick=function(){setEditShotPoint("end")};
+$("editShotClub").onchange=function(){if(state.editShotDraft)state.editShotDraft.club=this.value};
+$("editShotCourse").onchange=function(){if(state.editShotDraft)state.editShotDraft.courseId=this.value};
+$("editShotDistance").oninput=function(){if(state.editShotDraft){var v=Number(this.value);if(Number.isFinite(v)&&v>0)state.editShotDraft.meters=metersFromEditDistance(v)}};
+$("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);closeShotEdit();renderRecords()}};
 
 $("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();initMap();updateCourseLabel();updateTarget();
 var ios=/iPad|iPhone|iPod/.test(navigator.userAgent),standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;if(ios&&!standalone){$("iosHelp").hidden=false;$("iosHelp").textContent="iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリのように起動できます。"}
