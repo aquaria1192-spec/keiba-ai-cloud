@@ -19,5 +19,7 @@ var demo={
 var i=courses.findIndex(function(c){return c.id===id});
 if(i>=0)courses[i]=Object.assign({},courses[i],demo);else courses.push(demo);
 localStorage.setItem("gdn_courses",JSON.stringify(courses));
-localStorage.setItem("gdn_course_id",id);
+var selected=localStorage.getItem("gdn_course_id")||"";
+var selectedExists=courses.some(function(c){return c.id===selected});
+if(!selected||!selectedExists)localStorage.setItem("gdn_course_id",id);
 })();
