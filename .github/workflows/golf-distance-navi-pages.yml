@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import json, os, time, urllib.parse, urllib.request
+          import json, math, os, re, time, urllib.parse, urllib.request
 
           out_path = "golf-distance-navi/golf-courses-index.json"
           seed_path = "golf-distance-navi/golf-courses-seed.json"
@@ -48,31 +48,45 @@ jobs:
               except Exception:
                   seed = []
 
-          query = """[out:json][timeout:90];
+          endpoints = [
+              "https://overpass-api.de/api/interpreter",
+              "https://overpass.kumi.systems/api/interpreter",
+          ]
+
+          def fetch_overpass(query, label):
+              for endpoint in endpoints:
+                  for attempt in range(2):
+                      try:
+                          url = endpoint + "?" + urllib.parse.urlencode({"data": query})
+                          req = urllib.request.Request(
+                              url,
+                              headers={
+                                  "User-Agent": "GolfDistanceNavi/1.2 (GitHub Pages build)",
+                                  "Accept": "application/json",
+                              },
+                          )
+                          with urllib.request.urlopen(req, timeout=150) as r:
+                              data = json.load(r)
+                          print(label, "loaded from", endpoint)
+                          return data
+                      except Exception as e:
+                          print(label, "attempt", attempt + 1, "failed at", endpoint, ":", e)
+                          time.sleep(4 * (attempt + 1))
+              return None
+
+          course_query = """[out:json][timeout:90];
           nwr["leisure"="golf_course"](20.0,122.0,46.0,154.0);
           out tags center;"""
-          url = "https://overpass-api.de/api/interpreter?" + urllib.parse.urlencode({"data": query})
+          hole_query = """[out:json][timeout:120];
+          nwr["golf"="hole"]["par"](20.0,122.0,46.0,154.0);
+          out tags center;"""
 
-          raw = None
-          for attempt in range(3):
-              try:
-                  req = urllib.request.Request(
-                      url,
-                      headers={
-                          "User-Agent": "GolfDistanceNavi/1.0 (GitHub Pages build)",
-                          "Accept": "application/json",
-                      },
-                  )
-                  with urllib.request.urlopen(req, timeout=120) as r:
-                      raw = json.load(r)
-                  break
-              except Exception as e:
-                  print("Overpass attempt", attempt + 1, "failed:", e)
-                  time.sleep(5 * (attempt + 1))
+          raw_courses = fetch_overpass(course_query, "courses")
+          raw_holes = fetch_overpass(hole_query, "holes")
 
           items = []
-          if raw:
-              for e in raw.get("elements", []):
+          if raw_courses:
+              for e in raw_courses.get("elements", []):
                   tags = e.get("tags") or {}
                   center = e.get("center") or {}
                   lat = e.get("lat", center.get("lat"))
@@ -80,6 +94,7 @@ jobs:
                   names = {
                       "name": tags.get("name", ""),
                       "name:ja": tags.get("name:ja", ""),
+                      "name:en": tags.get("name:en", ""),
                       "official_name": tags.get("official_name", ""),
                       "alt_name": tags.get("alt_name", ""),
                       "short_name": tags.get("short_name", ""),
@@ -103,24 +118,127 @@ jobs:
                       },
                   })
 
+          def valid_num(v):
+              try:
+                  x = float(v)
+                  return x if math.isfinite(x) else None
+              except Exception:
+                  return None
+
+          def parse_hole_no(tags):
+              raw = tags.get("ref") or tags.get("hole") or tags.get("golf:hole") or tags.get("name") or ""
+              m = re.search(r"(?:^|\D)(1[0-8]|[1-9])(?:\D|$)", str(raw))
+              return int(m.group(1)) if m else None
+
+          def parse_par(tags):
+              try:
+                  p = int(float(tags.get("par") or tags.get("golf:par") or 0))
+                  return p if 3 <= p <= 6 else None
+              except Exception:
+                  return None
+
+          def hav_m(a_lat, a_lon, b_lat, b_lon):
+              R = 6371000.0
+              p1, p2 = math.radians(a_lat), math.radians(b_lat)
+              dp = math.radians(b_lat - a_lat)
+              dl = math.radians(b_lon - a_lon)
+              x = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+              return R * 2 * math.atan2(math.sqrt(x), math.sqrt(1-x))
+
+          # Spatial grid of golf course centers. Each cell is ~5.5km high.
+          cell = 0.05
+          grid = {}
+          for idx, c in enumerate(items):
+              lat, lon = valid_num(c.get("lat")), valid_num(c.get("lon"))
+              if lat is None or lon is None:
+                  continue
+              c["lat"], c["lon"] = lat, lon
+              g = (int(lat / cell), int(lon / cell))
+              grid.setdefault(g, []).append(idx)
+
+          assigned = {}
+          hole_count = 0
+          if raw_holes:
+              for e in raw_holes.get("elements", []):
+                  tags = e.get("tags") or {}
+                  no, par = parse_hole_no(tags), parse_par(tags)
+                  if not no or not par:
+                      continue
+                  center = e.get("center") or {}
+                  lat = valid_num(e.get("lat", center.get("lat")))
+                  lon = valid_num(e.get("lon", center.get("lon")))
+                  if lat is None or lon is None:
+                      continue
+                  hole_count += 1
+                  gx, gy = int(lat / cell), int(lon / cell)
+                  candidates = []
+                  for dx in (-1, 0, 1):
+                      for dy in (-1, 0, 1):
+                          candidates.extend(grid.get((gx + dx, gy + dy), []))
+                  best = None
+                  for ci in candidates:
+                      c = items[ci]
+                      d = hav_m(lat, lon, c["lat"], c["lon"])
+                      if d <= 3000 and (best is None or d < best[0]):
+                          best = (d, ci)
+                  if best is None:
+                      continue
+                  d, ci = best
+                  rec = assigned.setdefault(ci, {})
+                  old = rec.get(no)
+                  if old is None or d < old["dist"]:
+                      rec[no] = {"par": par, "dist": d}
+
+          courses_with_par = 0
+          for ci, holes in assigned.items():
+              if not holes:
+                  continue
+              pars = [None] * 18
+              known = [False] * 18
+              for no, rec in holes.items():
+                  pars[no - 1] = rec["par"]
+                  known[no - 1] = True
+              count = sum(known)
+              if count:
+                  items[ci]["pars"] = pars
+                  items[ci]["par_known"] = known
+                  items[ci]["par_count"] = count
+                  courses_with_par += 1
+
           def key(x):
               return (str(x.get("osm_type", "")), str(x.get("osm_id", "")), x.get("name", ""))
 
           merged = {}
           for x in seed + items:
               k = key(x)
+              if k in merged:
+                  old = merged[k]
+                  if old.get("pars") and not x.get("pars"):
+                      x["pars"] = old["pars"]
+                      x["par_known"] = old.get("par_known", [])
+                      x["par_count"] = old.get("par_count", 0)
               merged[k] = x
 
           final = sorted(merged.values(), key=lambda x: (x.get("name") or "").casefold())
           with open(out_path, "w", encoding="utf-8") as f:
               json.dump(
-                  {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "courses": final},
+                  {
+                      "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "courses": final,
+                      "stats": {
+                          "course_count": len(final),
+                          "hole_par_features": hole_count,
+                          "courses_with_par": courses_with_par,
+                      },
+                  },
                   f,
                   ensure_ascii=False,
                   separators=(",", ":"),
               )
 
           print("Golf course index entries:", len(final))
+          print("Hole PAR features:", hole_count)
+          print("Courses with PAR data:", courses_with_par)
           PY
 
       - name: Configure Pages
