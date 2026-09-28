@@ -134,6 +134,7 @@ jobs:
                           "prefecture": tags.get("addr:province") or tags.get("addr:state") or "",
                           "city": tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:village") or "",
                       },
+                      "website": tags.get("contact:website") or tags.get("website") or tags.get("url") or "",
                   })
 
           def valid_num(v):
