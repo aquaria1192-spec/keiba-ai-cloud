@@ -55,6 +55,7 @@
   <div class="panel">
     <h2>ショット距離</h2>
     <div class="field"><label for="club">使用クラブ</label><select id="club"></select></div>
+    <label class="notice" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer"><input id="continuousShot" type="checkbox" style="width:22px;height:22px;flex:none"><span><b>連続ショット計測</b><br><span class="meta">記録したボール位置を次のショット開始地点にします。</span></span></label>
     <div class="shot"><div class="cap">ショット飛距離</div><div class="big"><span id="shotDist" class="n">0</span><span id="shotUnit" class="u">yd</span></div><div id="shotState" class="help">打つ前に「ショット開始」を押してください。</div></div>
     <button id="startShot" class="btn">ショット開始</button>
     <button id="finishShot" class="btn finish" style="margin-top:10px" disabled>ボール位置で記録</button>
@@ -108,7 +109,7 @@
 (function(){
 "use strict";
 var YD=0.9144,defaults=["Driver","3W","5W","4UT","5UT","5I","6I","7I","8I","9I","PW","AW","SW"];
-var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotStart:null,watch:null,prompt:null,unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
+var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotStart:null,watch:null,prompt:null,continuousShot:localStorage.getItem("gdn_continuous_shot")!=="0",unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
 function $(id){return document.getElementById(id)}
 function load(k,d){try{var v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}}
 function save(k,v){localStorage.setItem(k,JSON.stringify(v))}
@@ -191,9 +192,25 @@ function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{
 
 function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n")}
 function updateShot(){var d=state.shotStart&&state.current?fmt(hav(state.shotStart,state.current)):0;$("shotUnit").textContent=ul();$("shotDist").textContent=d}
-function startShot(){if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent="計測中です。ボール位置まで移動してください。";updateShot()}
+function setShotMeasuringUi(message){$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent=message;updateShot()}
+function startShot(){if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};setShotMeasuringUi("計測中です。ボール位置まで移動してください。")}
 function cancelShot(){state.shotStart=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="打つ前に「ショット開始」を押してください。";updateShot()}
-function finishShot(){if(!state.shotStart||!state.current)return;var m=hav(state.shotStart,state.current);if(m<1){toast("移動距離が短すぎます");return}state.history.unshift({id:Date.now(),club:$("club").value,meters:m,at:new Date().toISOString(),accuracy:state.current.accuracy||null,courseId:state.courseId||""});state.history=state.history.slice(0,500);save("gdn_history",state.history);toast($("club").value+" "+fmt(m)+ul()+" を記録しました");cancelShot();renderRecords()}
+function finishShot(){
+ if(!state.shotStart||!state.current)return;
+ var m=hav(state.shotStart,state.current);
+ if(m<1){toast("移動距離が短すぎます");return}
+ var club=$("club").value,end={lat:state.current.lat,lng:state.current.lng};
+ state.history.unshift({id:Date.now(),club:club,meters:m,at:new Date().toISOString(),accuracy:state.current.accuracy||null,courseId:state.courseId||""});
+ state.history=state.history.slice(0,500);save("gdn_history",state.history);renderRecords();
+ if(state.continuousShot){
+   state.shotStart=end;
+   setShotMeasuringUi("連続計測中です。次のクラブを選び、次のボール地点で「記録」を押してください。");
+   toast(club+" "+fmt(m)+ul()+" を記録 → 次打を開始");
+ }else{
+   toast(club+" "+fmt(m)+ul()+" を記録しました");
+   cancelShot();
+ }
+}
 function renderRecords(){var s=$("stats"),h=$("history");s.innerHTML="";h.innerHTML="";if(!state.history.length){s.innerHTML='<div class="empty">まだショット記録がありません。</div>';h.innerHTML='<div class="empty">ショットを計測するとここに保存されます。</div>';return}var g={};state.history.forEach(function(r){(g[r.club]||(g[r.club]=[])).push(r.meters)});Object.keys(g).forEach(function(club){var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length,mx=Math.max.apply(null,a),r=document.createElement("div");r.className="row";r.innerHTML='<div><div class="main">'+club+'</div><div class="meta">'+a.length+'球 / 最大 '+fmt(mx)+ul()+'</div></div><div class="dist">'+fmt(avg)+ul()+'</div>';s.appendChild(r)});state.history.slice(0,80).forEach(function(x){var c=state.courses.find(function(v){return v.id===x.courseId}),r=document.createElement("div"),l=document.createElement("div"),rr=document.createElement("div"),d=document.createElement("span"),b=document.createElement("button");r.className="row";l.innerHTML='<div class="main">'+x.club+'</div><div class="meta">'+new Date(x.at).toLocaleString("ja-JP")+(c?" / "+c.name:"")+'</div>';d.className="dist";d.textContent=fmt(x.meters)+ul();b.className="del";b.textContent="削除";b.onclick=function(){state.history=state.history.filter(function(v){return v.id!==x.id});save("gdn_history",state.history);renderRecords()};rr.append(d,b);r.append(l,rr);h.appendChild(r)})}
 function saveSettings(){state.unit=$("unit").value;localStorage.setItem("gdn_unit",state.unit);var a=$("clubEdit").value.split(/\r?\n/).map(function(x){return x.trim()}).filter(Boolean);if(!a.length){toast("クラブを1つ以上入力してください");return}state.clubs=Array.from(new Set(a));save("gdn_clubs",state.clubs);renderClubs();updateTarget();updateShot();renderRecords();toast("設定を保存しました")}
 function exportCsv(){if(!state.history.length){toast("出力する記録がありません");return}var rows=[["日時","コース","クラブ","距離(m)","距離(yd)","GPS精度(m)"]];state.history.forEach(function(r){var c=state.courses.find(function(v){return v.id===r.courseId});rows.push([new Date(r.at).toLocaleString("ja-JP"),c?c.name:"",r.club,r.meters.toFixed(1),(r.meters/YD).toFixed(1),r.accuracy==null?"":Math.round(r.accuracy)])});var q=function(v){return '"'+String(v).replaceAll('"','""')+'"'};downloadBlob("\ufeff"+rows.map(function(r){return r.map(q).join(",")}).join("\r\n"),"golf-shot-history.csv","text/csv;charset=utf-8")}
@@ -207,6 +224,8 @@ $("gpsTest").onclick=function(){navigator.geolocation?navigator.geolocation.getC
 $("newCourse").onclick=newCourse;$("deleteCourse").onclick=deleteCourse;$("courseSelect").onchange=function(){changeCourse(this.value)};$("distanceCourseSelect").onchange=function(){changeCourse(this.value)};
 $("exportCourses").onclick=exportCourses;$("importCourses").onclick=function(){$("importFile").click()};$("importFile").onchange=function(){if(this.files&&this.files[0])importCoursesFile(this.files[0]);this.value=""};
 $("startShot").onclick=startShot;$("finishShot").onclick=finishShot;$("cancelShot").onclick=cancelShot;
+$("continuousShot").checked=state.continuousShot;
+$("continuousShot").onchange=function(){state.continuousShot=this.checked;localStorage.setItem("gdn_continuous_shot",this.checked?"1":"0");toast(this.checked?"連続ショット計測をONにしました":"連続ショット計測をOFFにしました")};
 $("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);renderRecords()}};
 
 $("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();initMap();updateCourseLabel();
