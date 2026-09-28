@@ -41,7 +41,7 @@
 .courseParGrid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:10px 0}
 .courseParCell{display:grid;gap:4px;text-align:center}
 .courseParCell label{font-size:10px;color:var(--muted);font-weight:800}
-.courseParCell select{width:100%;min-height:40px;border:1px solid #bdc8c1;border-radius:9px;background:#fff;font-size:15px;font-weight:800;text-align:center}
+.courseParCell select{width:100%;min-height:40px;border:1px solid #bdc8c1;border-radius:9px;background:#fff;font-size:15px;font-weight:800;text-align:center}.courseParCell.unknown select{border-color:#d69a22;background:#fff8e7}.courseParCell.known select{border-color:#79a88d;background:#f3faf6}
 .courseParTotal{display:flex;justify-content:space-between;align-items:center;background:#f3f7f4;border-radius:11px;padding:9px 11px;font-weight:800}
 @media(max-width:430px){.courseParGrid{grid-template-columns:repeat(6,1fr);gap:4px}.courseParCell select{padding:0;min-height:38px}}
 .hidden{display:none!important}
@@ -70,10 +70,11 @@
     <div class="field"><label for="courseSelect">使用するコース</label><select id="courseSelect"><option value="">コースを選択</option></select></div>
     <div id="courseParBox" class="courseParBox hidden">
       <div class="head"><h2 style="margin:0">18ホール PAR設定</h2><button id="resetCoursePars" class="link">初期化</button></div>
-      <p class="help" style="margin-top:8px">PARは無料公開データから自動取得を試みます。取得できない場合も、ここで1〜18Hを設定すれば次回以降のラウンドに自動反映します。</p>
+      <p class="help" style="margin-top:8px">PARはOpenStreetMapのホール情報から自動取得します。公開登録がないホールだけ手動で補完できます。</p>
+      <div id="courseParStatus" class="notice" style="margin:8px 0">PAR情報を確認しています。</div>
       <div id="courseParGrid" class="courseParGrid"></div>
       <div class="courseParTotal"><span>合計PAR</span><span id="courseParTotal">72</span></div>
-      <button id="saveCoursePars" class="btn" style="margin-top:10px">このコースのPARを保存</button>
+      <div class="grid" style="margin-top:10px"><button id="autoCoursePars" class="btn2">PAR自動取得</button><button id="saveCoursePars" class="btn">PARを保存</button></div>
     </div>
     <button id="deleteCourse" class="btn2 danger" style="margin-top:12px">選択コースを削除</button>
   </div>
@@ -271,18 +272,27 @@ function coursePars(c){
   return a.map(function(v){v=Number(v);return v>=3&&v<=6?v:4});
 }
 function renderCourseParEditor(){
-  var c=currentCourse(),box=$("courseParBox"),grid=$("courseParGrid");
+  var c=currentCourse(),box=$("courseParBox"),grid=$("courseParGrid"),status=$("courseParStatus");
   if(!box||!grid)return;
   box.classList.toggle("hidden",!c);grid.innerHTML="";
   if(!c)return;
-  var pars=coursePars(c);
+  var pars=coursePars(c),known=c.source&&Array.isArray(c.source.parKnown)?c.source.parKnown.slice(0,18):[];
+  var provider=c.source&&c.source.parProvider||"";
   pars.forEach(function(p,i){
-    var cell=document.createElement("div");cell.className="courseParCell";
+    var cell=document.createElement("div");cell.className="courseParCell"+(known.length?(known[i]?" known":" unknown"):"");
     var lab=document.createElement("label");lab.textContent=(i+1)+"H";
     var sel=document.createElement("select");sel.dataset.hole=String(i+1);
     [3,4,5,6].forEach(function(n){var o=document.createElement("option");o.value=String(n);o.textContent=String(n);if(n===p)o.selected=true;sel.appendChild(o)});
-    sel.onchange=updateCourseParTotal;cell.append(lab,sel);grid.appendChild(cell);
+    sel.onchange=function(){cell.classList.remove("unknown");cell.classList.add("known");updateCourseParTotal()};cell.append(lab,sel);grid.appendChild(cell);
   });
+  if(status){
+    var count=known.filter(Boolean).length;
+    if(provider==="OpenStreetMap"&&count===18)status.textContent="OpenStreetMapから18/18ホールのPARを自動取得済みです。";
+    else if(provider==="OpenStreetMap"&&count>0)status.textContent="OpenStreetMapから"+count+"/18ホールを取得しました。黄色のホールは手動で確認してください。";
+    else if(provider==="manual")status.textContent="このコースのPARは手動設定で保存済みです。";
+    else if(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)status.textContent="保存済みのPARを使用します。";
+    else status.textContent="PAR未取得です。「PAR自動取得」を押すか、各ホールを手動設定してください。";
+  }
   updateCourseParTotal();
 }
 function updateCourseParTotal(){
@@ -293,7 +303,7 @@ function saveCoursePars(){
   var c=currentCourse();if(!c){toast("コースを選択してください");return}
   var pars=Array.from(document.querySelectorAll("#courseParGrid select")).map(function(sel){return Number(sel.value)||4});
   if(pars.length!==18){toast("18ホールのPARを設定してください");return}
-  c.source=c.source||{};c.source.pars=pars;save("gdn_courses",state.courses);renderCourseParEditor();toast(c.name+" のPARを保存しました");
+  c.source=c.source||{};c.source.pars=pars;c.source.parKnown=Array(18).fill(true);c.source.parProvider="manual";save("gdn_courses",state.courses);renderCourseParEditor();toast(c.name+" のPARを保存しました");
 }
 function resetCoursePars(){
   if(!currentCourse())return;
@@ -302,57 +312,86 @@ function resetCoursePars(){
 }
 function renderCourseSelect(){var s=$("courseSelect"),v=state.courseId;s.innerHTML='<option value="">コースを選択</option>';state.courses.forEach(function(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.name;s.appendChild(o)});if(state.courses.some(function(c){return c.id===v}))s.value=v;else state.courseId="";updateCourseLabel();renderCourseParEditor()}
 function updateCourseLabel(){var c=currentCourse();$("activeCourseLabel").textContent=c?"使用コース: "+c.name:""}
-function courseLookupNames(c){
-  var src=c&&c.source||{},n=src.names||{},a=[
-    src.officialName,c&&c.name,n["name:ja"],n["name:en"],n.name,n.official_name,n.alt_name,n.short_name,n.old_name
-  ].filter(Boolean),seen=new Set(),out=[];
-  a.forEach(function(v){var k=String(v).trim();if(k&&!seen.has(k)){seen.add(k);out.push(k)}});
-  return out;
+function parseHoleNumber(v){
+  var m=String(v||"").match(/(?:^|\D)(1[0-8]|[1-9])(?:\D|$)/);
+  return m?Number(m[1]):null;
 }
-async function autoFetchCoursePars(c){
-  if(!c||c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return false;
+function validPar(v){v=Number(v);return Number.isFinite(v)&&v>=3&&v<=6?v:null}
+function geoDistance(a,b){
+  var R=6371000,p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dp=(b.lat-a.lat)*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180;
+  var x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+async function overpassJson(query){
+  var eps=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
+  for(var i=0;i<eps.length;i++){
+    try{
+      var r=await fetch(eps[i]+"?data="+encodeURIComponent(query),{cache:"no-store"});
+      if(r.ok)return await r.json();
+    }catch(e){}
+  }
+  throw new Error("overpass");
+}
+function extractOsmPars(raw,c){
+  var byHole={},center=courseCenter(c);
+  (raw&&raw.elements||[]).forEach(function(e){
+    var t=e.tags||{},no=parseHoleNumber(t.ref||t.hole||t["golf:hole"]||t.name),par=validPar(t.par||t["golf:par"]);
+    if(!no||!par)return;
+    var ec=e.center||{},p=(Number.isFinite(Number(ec.lat))&&Number.isFinite(Number(ec.lon)))?{lat:Number(ec.lat),lng:Number(ec.lon)}:null;
+    var dist=center&&p?geoDistance(center,p):999999;
+    if(!byHole[no]||dist<byHole[no].dist)byHole[no]={par:par,dist:dist};
+  });
+  var current=coursePars(c),known=Array(18).fill(false),count=0;
+  for(var h=1;h<=18;h++)if(byHole[h]){current[h-1]=byHole[h].par;known[h-1]=true;count++}
+  return{pars:current,known:known,count:count};
+}
+async function fetchOsmPars(c){
+  var src=c&&c.source||{},type=String(src.osmType||""),id=Number(src.osmId),center=courseCenter(c),queries=[];
+  if((type==="way"||type==="relation")&&Number.isFinite(id)){
+    queries.push('[out:json][timeout:25];'+type+'('+id+')->.course;.course map_to_area->.a;nwr(area.a)["golf"="hole"];out tags center;');
+  }
+  if(center){
+    queries.push('[out:json][timeout:25];nwr(around:2600,'+center.lat+','+center.lng+')["golf"="hole"];out tags center;');
+  }
+  var best={pars:coursePars(c),known:Array(18).fill(false),count:0};
+  for(var i=0;i<queries.length;i++){
+    try{
+      var raw=await overpassJson(queries[i]),got=extractOsmPars(raw,c);
+      if(got.count>best.count)best=got;
+      if(best.count===18)break;
+    }catch(e){}
+  }
+  return best;
+}
+async function autoFetchCoursePars(c,force){
+  if(!c)return false;
+  if(!force&&c.source&&c.source.parProvider==="manual"&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return true;
   try{
-    var names=courseLookupNames(c),items=[],queryUsed="";
-    for(var qi=0;qi<names.length;qi++){
-      var q=names[qi],sr=await fetch("https://api.opengolfapi.org/v1/courses/search?q="+encodeURIComponent(q)+"&limit=12",{cache:"no-store"});
-      if(!sr.ok)continue;
-      var sd=await sr.json(),arr=Array.isArray(sd)?sd:(sd.courses||sd.results||sd.data||[]);
-      if(arr.length){items=arr;queryUsed=q;break}
-    }
-    if(!items.length)return false;
-    var nrm=function(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\s　・･\-_/()（）]/g,"")};
-    var wants=names.map(nrm).filter(Boolean);
-    function itemNames(x){return[x.name,x.course_name,x.courseName,x.club_name,x.clubName,x.official_name,x.officialName].filter(Boolean).map(nrm)}
-    function itemScore(x){
-      var xs=itemNames(x),best=0;
-      xs.forEach(function(xn){wants.forEach(function(w){if(xn===w)best=Math.max(best,100);else if(xn&&w&&(xn.indexOf(w)>=0||w.indexOf(xn)>=0))best=Math.max(best,70)})});
-      return best;
-    }
-    items.sort(function(a,b){return itemScore(b)-itemScore(a)});
-    var hit=items[0],id=hit.id||hit.course_id||hit.courseId||hit.uuid;if(!id)return false;
-    var dr=await fetch("https://api.opengolfapi.org/v1/courses/"+encodeURIComponent(id),{cache:"no-store"});
-    if(!dr.ok)throw new Error("detail");
-    var d=await dr.json(),root=d.course||d.data||d;
-    var holes=root.holes||(root.scorecard&&root.scorecard.holes)||(d.scorecard&&d.scorecard.holes)||[];
-    if(!Array.isArray(holes)||holes.length<18){
-      var hr=await fetch("https://api.opengolfapi.org/v1/courses/"+encodeURIComponent(id)+"/holes",{cache:"no-store"});
-      if(hr.ok){var hd=await hr.json();holes=Array.isArray(hd)?hd:(hd.holes||(hd.data&&hd.data.holes)||hd.data||[])}
-    }
-    var pars=holes.slice(0,18).map(function(h){return Number(h.par||h.par_value||h.parValue)});
-    if(pars.length!==18||pars.some(function(p){return !Number.isFinite(p)||p<3||p>6}))return false;
-    c.source=c.source||{};c.source.pars=pars;c.source.parProvider="OpenGolfAPI";c.source.parCourseId=String(id);c.source.parQuery=queryUsed;
-    save("gdn_courses",state.courses);renderCourseParEditor();toast(c.name+" のPARを自動取得しました");return true;
+    var got=await fetchOsmPars(c);
+    if(!got.count)return false;
+    c.source=c.source||{};c.source.pars=got.pars;c.source.parKnown=got.known;c.source.parProvider="OpenStreetMap";
+    save("gdn_courses",state.courses);renderCourseParEditor();
+    if(got.count===18)toast(c.name+" のPARを18ホール自動取得しました");
+    else toast(c.name+" のPARを"+got.count+"/18ホール取得しました");
+    return got.count>0;
   }catch(e){return false}
 }
 async function ensureSelectedCoursePars(){
   var c=currentCourse();if(!c)return;
-  if(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return;
-  var ok=await autoFetchCoursePars(c);
-  if(!ok)renderCourseParEditor();
+  if(c.source&&((c.source.parProvider==="manual")||(c.source.parProvider==="OpenStreetMap"&&Array.isArray(c.source.parKnown)&&c.source.parKnown.filter(Boolean).length===18)))return;
+  await autoFetchCoursePars(c,false);renderCourseParEditor();
+}
+async function retryCoursePars(){
+  var c=currentCourse();if(!c){toast("コースを選択してください");return}
+  var b=$("autoCoursePars");if(b)b.disabled=true;
+  if($("courseParStatus"))$("courseParStatus").textContent="OpenStreetMapからPARを取得しています…";
+  var ok=await autoFetchCoursePars(c,true);
+  if(!ok){renderCourseParEditor();if($("courseParStatus"))$("courseParStatus").textContent="このコースにはホール別PARが公開登録されていません。手動設定をご利用ください。";toast("ホール別PARを取得できませんでした")}
+  if(b)b.disabled=false;
 }
 async function changeCourse(id){
   state.courseId=id||"";localStorage.setItem("gdn_course_id",state.courseId);updateCourseLabel();renderCourseParEditor();
-  if(state.courseId){focusSelectedCourse();var c=currentCourse();if(c&&!(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)){toast("PARを取得しています…");var ok=await autoFetchCoursePars(c);if(!ok)toast("PARを自動取得できませんでした。手動で設定できます")}}
+  if(state.courseId){focusSelectedCourse();var c=currentCourse();if(c){var ok=await autoFetchCoursePars(c,false);if(!ok)renderCourseParEditor()}}
 }
 function newCourse(){var name=prompt("コース名を入力してください");if(name===null)return;name=name.trim();if(!name)return;var c={id:"c"+Date.now(),name:name,source:{provider:"manual"}};state.courses.push(c);save("gdn_courses",state.courses);state.courseId=c.id;localStorage.setItem("gdn_course_id",c.id);renderCourseSelect();toast(name+" を追加しました")}
 function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコースを選択してください");return}if(!confirm(c.name+" を削除しますか？"))return;state.courses=state.courses.filter(function(x){return x.id!==c.id});save("gdn_courses",state.courses);state.courseId="";localStorage.removeItem("gdn_course_id");renderCourseSelect();toast("コースを削除しました")}
@@ -526,7 +565,7 @@ function downloadBlob(content,name,type){var blob=new Blob([content],{type:type}
 function sw(name){document.querySelectorAll(".screen").forEach(function(e){e.classList.toggle("active",e.id===name)});document.querySelectorAll(".nav button").forEach(function(e){e.classList.toggle("active",e.dataset.s===name)});if(name==="distance"&&state.map)setTimeout(function(){state.map.invalidateSize();var c=currentCourse();if(c&&!state._distanceOpened){state._distanceOpened=true;focusSelectedCourse()}},80);if(name==="score")renderScore();if(name==="records")renderRecords()}
 document.querySelectorAll(".nav button").forEach(function(b){b.onclick=function(){sw(b.dataset.s)}});
 $("locate").onclick=startGps;$("recenter").onclick=recenter;$("courseCenter").onclick=focusSelectedCourse;$("clearTarget").onclick=clearTarget;$("gpsTest").onclick=function(){navigator.geolocation?navigator.geolocation.getCurrentPosition(pos,geoErr,{enableHighAccuracy:true,timeout:15000,maximumAge:0}):toast("GPS非対応です")};
-$("newCourse").onclick=newCourse;$("deleteCourse").onclick=deleteCourse;$("courseSelect").onchange=function(){changeCourse(this.value)};$("saveCoursePars").onclick=saveCoursePars;$("resetCoursePars").onclick=resetCoursePars;
+$("newCourse").onclick=newCourse;$("deleteCourse").onclick=deleteCourse;$("courseSelect").onchange=function(){changeCourse(this.value)};$("saveCoursePars").onclick=saveCoursePars;$("resetCoursePars").onclick=resetCoursePars;$("autoCoursePars").onclick=retryCoursePars;
 $("exportCourses").onclick=exportCourses;$("importCourses").onclick=function(){$("importFile").click()};$("importFile").onchange=function(){if(this.files&&this.files[0])importCoursesFile(this.files[0]);this.value=""};
 $("startShot").onclick=startShot;$("finishShot").onclick=finishShot;$("cancelShot").onclick=cancelShot;$("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);renderRecords()}};
 $("newRound").onclick=startRound;$("finishRound").onclick=finishRound;
