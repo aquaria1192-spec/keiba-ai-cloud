@@ -77,12 +77,25 @@ jobs:
           course_query = """[out:json][timeout:90];
           nwr["leisure"="golf_course"](20.0,122.0,46.0,154.0);
           out tags center;"""
-          hole_query = """[out:json][timeout:120];
-          nwr["golf"="hole"]["par"](20.0,122.0,46.0,154.0);
-          out tags center;"""
-
           raw_courses = fetch_overpass(course_query, "courses")
-          raw_holes = fetch_overpass(hole_query, "holes")
+
+          hole_regions = [
+              ("southwest", 24.0, 122.0, 33.5, 133.8),
+              ("west",      31.0, 129.0, 36.0, 138.5),
+              ("central",   34.0, 135.0, 39.0, 142.5),
+              ("northeast", 37.0, 138.0, 42.5, 145.5),
+              ("hokkaido",  41.0, 139.0, 46.5, 146.5),
+          ]
+          hole_elements = {}
+          for label, south, west, north, east in hole_regions:
+              q = f"""[out:json][timeout:60];
+              way["golf"="hole"]["par"]({south},{west},{north},{east});
+              out tags center;"""
+              part = fetch_overpass(q, "holes-" + label)
+              if part:
+                  for e in part.get("elements", []):
+                      hole_elements[(e.get("type"), e.get("id"))] = e
+          raw_holes = {"elements": list(hole_elements.values())}
 
           items = []
           if raw_courses:
