@@ -70,7 +70,7 @@
     <div class="field"><label for="courseSelect">使用するコース</label><select id="courseSelect"><option value="">コースを選択</option></select></div>
     <div id="courseParBox" class="courseParBox hidden">
       <div class="head"><h2 style="margin:0">18ホール PAR設定</h2><button id="resetCoursePars" class="link">初期化</button></div>
-      <p class="help" style="margin-top:8px">PARは「PAR自動取得」を押した時だけOpenStreetMapから取得します。取得できない場合でも待ち続けず、手動で設定できます。</p>
+      <p class="help" style="margin-top:8px">PARは公開時に事前取得したOpenStreetMapデータから読み込みます。外部通信を待たないため、取得できない場合もすぐ手動設定へ進めます。</p>
       <div id="courseParStatus" class="notice" style="margin:8px 0">PAR情報を確認しています。</div>
       <div id="courseParGrid" class="courseParGrid"></div>
       <div class="courseParTotal"><span>合計PAR</span><span id="courseParTotal">72</span></div>
@@ -287,8 +287,8 @@ function renderCourseParEditor(){
   });
   if(status){
     var count=known.filter(Boolean).length;
-    if(provider==="OpenStreetMap"&&count===18)status.textContent="OpenStreetMapから18/18ホールのPARを自動取得済みです。";
-    else if(provider==="OpenStreetMap"&&count>0)status.textContent="OpenStreetMapから"+count+"/18ホールを取得しました。黄色のホールは手動で確認してください。";
+    if(provider==="OpenStreetMapIndex"&&count===18)status.textContent="事前取得済みデータから18/18ホールのPARを反映済みです。";
+    else if(provider==="OpenStreetMapIndex"&&count>0)status.textContent="事前取得済みデータから"+count+"/18ホールを反映しました。黄色のホールは手動で確認してください。";
     else if(provider==="manual")status.textContent="このコースのPARは手動設定で保存済みです。";
     else if(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)status.textContent="保存済みのPARを使用します。";
     else status.textContent="PAR未取得です。「PAR自動取得」を押すか、各ホールを手動設定してください。";
@@ -312,93 +312,97 @@ function resetCoursePars(){
 }
 function renderCourseSelect(){var s=$("courseSelect"),v=state.courseId;s.innerHTML='<option value="">コースを選択</option>';state.courses.forEach(function(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.name;s.appendChild(o)});if(state.courses.some(function(c){return c.id===v}))s.value=v;else state.courseId="";updateCourseLabel();renderCourseParEditor()}
 function updateCourseLabel(){var c=currentCourse();$("activeCourseLabel").textContent=c?"使用コース: "+c.name:""}
-function parseHoleNumber(v){
-  var m=String(v||"").match(/(?:^|\D)(1[0-8]|[1-9])(?:\D|$)/);
-  return m?Number(m[1]):null;
-}
-function validPar(v){v=Number(v);return Number.isFinite(v)&&v>=3&&v<=6?v:null}
-function geoDistance(a,b){
-  var R=6371000,p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dp=(b.lat-a.lat)*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180;
-  var x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
-  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
-}
-async function overpassJson(query){
-  var eps=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
-  for(var i=0;i<eps.length;i++){
-    var controller=new AbortController(),timer=setTimeout(function(){controller.abort()},7000);
+var localCourseIndexPromise=null;
+function normCourseText(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\s　・･\-_/()（）]/g,"")}
+async function loadLocalCourseIndex(){
+  if(localCourseIndexPromise)return localCourseIndexPromise;
+  localCourseIndexPromise=(async function(){
+    var controller=new AbortController(),timer=setTimeout(function(){controller.abort()},5000);
     try{
-      var r=await fetch(eps[i]+"?data="+encodeURIComponent(query),{cache:"no-store",signal:controller.signal});
+      var r=await fetch("./golf-courses-index.json",{cache:"no-store",signal:controller.signal});
       clearTimeout(timer);
-      if(r.ok)return await r.json();
-    }catch(e){clearTimeout(timer)}
-  }
-  throw new Error("overpass-timeout");
+      if(!r.ok)throw new Error("index");
+      var d=await r.json();
+      return Array.isArray(d)?d:(d.courses||[]);
+    }catch(e){
+      clearTimeout(timer);
+      localCourseIndexPromise=null;
+      throw e;
+    }
+  })();
+  return localCourseIndexPromise;
 }
-function extractOsmPars(raw,c){
-  var byHole={},center=courseCenter(c);
-  (raw&&raw.elements||[]).forEach(function(e){
-    var t=e.tags||{},no=parseHoleNumber(t.ref||t.hole||t["golf:hole"]||t.name),par=validPar(t.par||t["golf:par"]);
-    if(!no||!par)return;
-    var ec=e.center||{},p=(Number.isFinite(Number(ec.lat))&&Number.isFinite(Number(ec.lon)))?{lat:Number(ec.lat),lng:Number(ec.lon)}:null;
-    var dist=center&&p?geoDistance(center,p):999999;
-    if(!byHole[no]||dist<byHole[no].dist)byHole[no]={par:par,dist:dist};
+function findLocalCourseRecord(c,list){
+  var src=c&&c.source||{},t=String(src.osmType||""),id=String(src.osmId||"");
+  if(t&&id){
+    var exact=list.find(function(x){return String(x.osm_type||"")===t&&String(x.osm_id||"")===id});
+    if(exact)return exact;
+  }
+  var names=[src.officialName,c&&c.name];
+  if(src.names)names.push(src.names["name:ja"],src.names.name,src.names.official_name,src.names.alt_name,src.names.short_name,src.names.old_name);
+  var wants=names.filter(Boolean).map(normCourseText).filter(Boolean);
+  var exactName=list.find(function(x){
+    var vals=[x.name,x.names&&x.names["name:ja"],x.names&&x.names.name,x.names&&x.names.official_name,x.names&&x.names.alt_name].filter(Boolean).map(normCourseText);
+    return vals.some(function(v){return wants.indexOf(v)>=0});
   });
-  var current=coursePars(c),known=Array(18).fill(false),count=0;
-  for(var h=1;h<=18;h++)if(byHole[h]){current[h-1]=byHole[h].par;known[h-1]=true;count++}
-  return{pars:current,known:known,count:count};
+  return exactName||null;
 }
-async function fetchOsmPars(c){
-  var src=c&&c.source||{},type=String(src.osmType||""),id=Number(src.osmId),center=courseCenter(c),queries=[];
-  if(center)queries.push('[out:json][timeout:8];nwr(around:2200,'+center.lat+','+center.lng+')["golf"="hole"];out tags center;');
-  if((type==="way"||type==="relation")&&Number.isFinite(id))queries.push('[out:json][timeout:8];'+type+'('+id+')->.course;.course map_to_area->.a;nwr(area.a)["golf"="hole"];out tags center;');
-  var best={pars:coursePars(c),known:Array(18).fill(false),count:0};
-  for(var i=0;i<queries.length;i++){
-    try{
-      var raw=await overpassJson(queries[i]),got=extractOsmPars(raw,c);
-      if(got.count>best.count)best=got;
-      if(best.count===18)break;
-    }catch(e){}
+function applyLocalPars(c,rec){
+  if(!c||!rec||!Array.isArray(rec.pars))return 0;
+  var pars=coursePars(c),known=Array(18).fill(false),count=0;
+  for(var i=0;i<18;i++){
+    var p=Number(rec.pars[i]);
+    if(Number.isFinite(p)&&p>=3&&p<=6){pars[i]=p;known[i]=true;count++}
   }
-  return best;
+  if(!count)return 0;
+  c.source=c.source||{};
+  c.source.pars=pars;
+  c.source.parKnown=known;
+  c.source.parProvider="OpenStreetMapIndex";
+  c.source.parCount=count;
+  save("gdn_courses",state.courses);
+  renderCourseParEditor();
+  return count;
 }
 async function autoFetchCoursePars(c,force){
   if(!c)return false;
   if(!force&&c.source&&c.source.parProvider==="manual"&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return true;
   try{
-    var got=await fetchOsmPars(c);
-    if(!got.count)return false;
-    c.source=c.source||{};c.source.pars=got.pars;c.source.parKnown=got.known;c.source.parProvider="OpenStreetMap";
-    save("gdn_courses",state.courses);renderCourseParEditor();
-    if(got.count===18)toast(c.name+" のPARを18ホール自動取得しました");
-    else toast(c.name+" のPARを"+got.count+"/18ホール取得しました");
-    return got.count>0;
+    var list=await loadLocalCourseIndex(),rec=findLocalCourseRecord(c,list),count=applyLocalPars(c,rec);
+    if(!count)return false;
+    if(count===18)toast(c.name+" のPARを18ホール取得しました");
+    else toast(c.name+" のPARを"+count+"/18ホール取得しました");
+    return true;
   }catch(e){return false}
 }
 async function ensureSelectedCoursePars(){
+  var c=currentCourse();if(!c){renderCourseParEditor();return}
+  if(c.source&&c.source.parProvider==="manual"){renderCourseParEditor();return}
+  await autoFetchCoursePars(c,false);
   renderCourseParEditor();
 }
 async function retryCoursePars(){
   var c=currentCourse();if(!c){toast("コースを選択してください");return}
   var b=$("autoCoursePars"),status=$("courseParStatus");if(b)b.disabled=true;
-  if(status)status.textContent="PARを取得しています（最大約15秒）…";
+  if(status)status.textContent="事前取得済みのPARデータを確認しています…";
   try{
     var ok=await autoFetchCoursePars(c,true);
     if(!ok){
       renderCourseParEditor();
-      if(status)status.textContent="自動取得できませんでした。下のPARを手動設定して保存できます。";
-      toast("PARを自動取得できませんでした");
+      if(status)status.textContent="このコースのホール別PARは公開データにありません。下で手動設定して保存できます。";
+      toast("公開PARデータがありません");
     }
   }catch(e){
     renderCourseParEditor();
-    if(status)status.textContent="通信が完了しませんでした。手動設定をご利用ください。";
-    toast("PAR取得を終了しました");
+    if(status)status.textContent="PARデータを読み込めませんでした。手動設定をご利用ください。";
+    toast("PARデータを読み込めませんでした");
   }finally{
     if(b)b.disabled=false;
   }
 }
 async function changeCourse(id){
   state.courseId=id||"";localStorage.setItem("gdn_course_id",state.courseId);updateCourseLabel();renderCourseParEditor();
-  if(state.courseId)focusSelectedCourse();
+  if(state.courseId){focusSelectedCourse();await ensureSelectedCoursePars()}
 }
 function newCourse(){var name=prompt("コース名を入力してください");if(name===null)return;name=name.trim();if(!name)return;var c={id:"c"+Date.now(),name:name,source:{provider:"manual"}};state.courses.push(c);save("gdn_courses",state.courses);state.courseId=c.id;localStorage.setItem("gdn_course_id",c.id);renderCourseSelect();toast(name+" を追加しました")}
 function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコースを選択してください");return}if(!confirm(c.name+" を削除しますか？"))return;state.courses=state.courses.filter(function(x){return x.id!==c.id});save("gdn_courses",state.courses);state.courseId="";localStorage.removeItem("gdn_course_id");renderCourseSelect();toast("コースを削除しました")}
