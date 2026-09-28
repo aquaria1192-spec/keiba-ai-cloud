@@ -18,7 +18,7 @@ function nameContains(p,q){var nq=norm(q);return nameValues(p).some(function(v){
 function score(p,q){var nq=norm(q),best=0;nameValues(p).forEach(function(v){var n=norm(v);if(n===nq)best=Math.max(best,100);else if(n.indexOf(nq)===0)best=Math.max(best,80);else if(n.indexOf(nq)>=0)best=Math.max(best,60)});return best}
 function indexToPlace(x){
   var names=x.names||{},name=x.name||names.name||names["name:ja"]||"名称未設定",addr=x.addr||{};
-  return{osm_type:x.osm_type||"local",osm_id:x.osm_id||name,name:name,lat:x.lat,lon:x.lon,names:names,display_name:[name,addr.prefecture,addr.city].filter(Boolean).join(", ")};
+  return{osm_type:x.osm_type||"local",osm_id:x.osm_id||name,name:name,lat:x.lat,lon:x.lon,names:names,website:x.website||"",display_name:[name,addr.prefecture,addr.city].filter(Boolean).join(", ")};
 }
 function normalizeIndex(payload){
   var arr=Array.isArray(payload)?payload:(payload&&Array.isArray(payload.courses)?payload.courses:[]),m=new Map();
@@ -69,7 +69,7 @@ function registerSelected(){
   var courses=read("gdn_courses",[]);
   var id="osm-"+String(selected.osm_type||"x")+"-"+String(selected.osm_id||selected.name);
   var center=(Number.isFinite(Number(selected.lat))&&Number.isFinite(Number(selected.lon)))?{lat:Number(selected.lat),lng:Number(selected.lon)}:null;
-  var course={id:id,name:selected.name,source:{provider:"OpenStreetMap",osmType:selected.osm_type||"",osmId:selected.osm_id||"",courseCenter:center,names:selected.names||{}}};
+  var course={id:id,name:selected.name,source:{provider:"OpenStreetMap",osmType:selected.osm_type||"",osmId:selected.osm_id||"",courseCenter:center,names:selected.names||{},website:selected.website||""}};
   var idx=courses.findIndex(function(c){return c.id===id});
   if(idx>=0){
     course.source=Object.assign({},courses[idx].source||{},course.source);
