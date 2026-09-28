@@ -57,7 +57,7 @@
 <section id="course" class="screen active">
   <div class="panel">
     <h2>ゴルフ場を検索</h2>
-    <p class="help">ゴルフ場名の一部を入力して検索します。コース画面では、ゴルフ場の登録・選択だけを行います。</p>
+    <p class="help">ゴルフ場名の一部を入力して検索します。登録したコースは、距離測定・ラウンド・スコア・分析で共通して利用できます。</p>
     <div class="field"><label for="osmQuery">ゴルフ場名</label><input id="osmQuery" type="search" enterkeyhint="search" autocomplete="off" placeholder="例：那須小川、矢板、メイフラワー"></div>
     <div class="grid"><button id="osmSearch" class="btn">検索</button><button id="osmImport" class="btn2" disabled>選択コースを登録</button></div>
     <div id="osmSelected" class="meta" style="margin-top:8px"></div>
@@ -70,7 +70,7 @@
     <div class="field"><label for="courseSelect">使用するコース</label><select id="courseSelect"><option value="">コースを選択</option></select></div>
     <div id="courseParBox" class="courseParBox hidden">
       <div class="head"><h2 style="margin:0">18ホール PAR設定</h2><button id="resetCoursePars" class="link">初期化</button></div>
-      <p class="help" style="margin-top:8px">このコースのPARを一度設定すると、次回以降のラウンドに自動反映します。</p>
+      <p class="help" style="margin-top:8px">PARは無料公開データから自動取得を試みます。取得できない場合も、ここで1〜18Hを設定すれば次回以降のラウンドに自動反映します。</p>
       <div id="courseParGrid" class="courseParGrid"></div>
       <div class="courseParTotal"><span>合計PAR</span><span id="courseParTotal">72</span></div>
       <button id="saveCoursePars" class="btn" style="margin-top:10px">このコースのPARを保存</button>
@@ -302,29 +302,53 @@ function resetCoursePars(){
 }
 function renderCourseSelect(){var s=$("courseSelect"),v=state.courseId;s.innerHTML='<option value="">コースを選択</option>';state.courses.forEach(function(c){var o=document.createElement("option");o.value=c.id;o.textContent=c.name;s.appendChild(o)});if(state.courses.some(function(c){return c.id===v}))s.value=v;else state.courseId="";updateCourseLabel();renderCourseParEditor()}
 function updateCourseLabel(){var c=currentCourse();$("activeCourseLabel").textContent=c?"使用コース: "+c.name:""}
+function courseLookupNames(c){
+  var src=c&&c.source||{},n=src.names||{},a=[
+    src.officialName,c&&c.name,n["name:ja"],n["name:en"],n.name,n.official_name,n.alt_name,n.short_name,n.old_name
+  ].filter(Boolean),seen=new Set(),out=[];
+  a.forEach(function(v){var k=String(v).trim();if(k&&!seen.has(k)){seen.add(k);out.push(k)}});
+  return out;
+}
 async function autoFetchCoursePars(c){
   if(!c||c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return false;
   try{
-    var q=encodeURIComponent((c.source&&c.source.officialName)||c.name);
-    var sr=await fetch("https://api.opengolfapi.org/v1/courses/search?q="+q+"&limit=8",{cache:"no-store"});
-    if(!sr.ok)throw new Error("search");
-    var sd=await sr.json(),items=Array.isArray(sd)?sd:(sd.courses||sd.results||sd.data||[]);
+    var names=courseLookupNames(c),items=[],queryUsed="";
+    for(var qi=0;qi<names.length;qi++){
+      var q=names[qi],sr=await fetch("https://api.opengolfapi.org/v1/courses/search?q="+encodeURIComponent(q)+"&limit=12",{cache:"no-store"});
+      if(!sr.ok)continue;
+      var sd=await sr.json(),arr=Array.isArray(sd)?sd:(sd.courses||sd.results||sd.data||[]);
+      if(arr.length){items=arr;queryUsed=q;break}
+    }
     if(!items.length)return false;
-    var n=function(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\\s　・･\\-_/()（）]/g,"")},want=n(c.name);
-    var hit=items.find(function(x){var xn=n(x.name||x.course_name);return xn===want})||items.find(function(x){var xn=n(x.name||x.course_name);return xn&&want&&(xn.indexOf(want)>=0||want.indexOf(xn)>=0)})||items[0];
-    var id=hit.id||hit.course_id||hit.courseId;if(!id)return false;
+    var nrm=function(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[\s　・･\-_/()（）]/g,"")};
+    var wants=names.map(nrm).filter(Boolean);
+    function itemNames(x){return[x.name,x.course_name,x.courseName,x.club_name,x.clubName,x.official_name,x.officialName].filter(Boolean).map(nrm)}
+    function itemScore(x){
+      var xs=itemNames(x),best=0;
+      xs.forEach(function(xn){wants.forEach(function(w){if(xn===w)best=Math.max(best,100);else if(xn&&w&&(xn.indexOf(w)>=0||w.indexOf(xn)>=0))best=Math.max(best,70)})});
+      return best;
+    }
+    items.sort(function(a,b){return itemScore(b)-itemScore(a)});
+    var hit=items[0],id=hit.id||hit.course_id||hit.courseId||hit.uuid;if(!id)return false;
     var dr=await fetch("https://api.opengolfapi.org/v1/courses/"+encodeURIComponent(id),{cache:"no-store"});
     if(!dr.ok)throw new Error("detail");
-    var d=await dr.json(),holes=d.holes||(d.scorecard&&d.scorecard.holes)||(d.course&&d.course.holes)||[];
+    var d=await dr.json(),root=d.course||d.data||d;
+    var holes=root.holes||(root.scorecard&&root.scorecard.holes)||(d.scorecard&&d.scorecard.holes)||[];
     if(!Array.isArray(holes)||holes.length<18){
       var hr=await fetch("https://api.opengolfapi.org/v1/courses/"+encodeURIComponent(id)+"/holes",{cache:"no-store"});
-      if(hr.ok){var hd=await hr.json();holes=Array.isArray(hd)?hd:(hd.holes||hd.data||[])}
+      if(hr.ok){var hd=await hr.json();holes=Array.isArray(hd)?hd:(hd.holes||(hd.data&&hd.data.holes)||hd.data||[])}
     }
-    var pars=holes.slice(0,18).map(function(h){return Number(h.par)});
+    var pars=holes.slice(0,18).map(function(h){return Number(h.par||h.par_value||h.parValue)});
     if(pars.length!==18||pars.some(function(p){return !Number.isFinite(p)||p<3||p>6}))return false;
-    c.source=c.source||{};c.source.pars=pars;c.source.parProvider="OpenGolfAPI";c.source.parCourseId=String(id);
+    c.source=c.source||{};c.source.pars=pars;c.source.parProvider="OpenGolfAPI";c.source.parCourseId=String(id);c.source.parQuery=queryUsed;
     save("gdn_courses",state.courses);renderCourseParEditor();toast(c.name+" のPARを自動取得しました");return true;
   }catch(e){return false}
+}
+async function ensureSelectedCoursePars(){
+  var c=currentCourse();if(!c)return;
+  if(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return;
+  var ok=await autoFetchCoursePars(c);
+  if(!ok)renderCourseParEditor();
 }
 async function changeCourse(id){
   state.courseId=id||"";localStorage.setItem("gdn_course_id",state.courseId);updateCourseLabel();renderCourseParEditor();
@@ -518,7 +542,7 @@ $("roundScoreMinus").onclick=function(){adjustScore(-1)};
 $("roundScorePlus").onclick=function(){adjustScore(1)};
 $("roundShotToggle").onclick=function(){if(state.shotStart)finishShot();else startShot();updateShot()};
 $("roundNextHole").onclick=function(){saveScoreEditor();if(state.scoreHole<18)setScoreHole(state.scoreHole+1);else toast("18Hまで入力しました")};
-$("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();renderScore();initMap();updateCourseLabel();$("env").textContent="HTTPS: "+(window.isSecureContext?"OK":"NG")+" / GPS API: "+(navigator.geolocation?"OK":"NG")+" / 航空写真: 国土地理院";
+$("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();renderScore();initMap();updateCourseLabel();ensureSelectedCoursePars();$("env").textContent="HTTPS: "+(window.isSecureContext?"OK":"NG")+" / GPS API: "+(navigator.geolocation?"OK":"NG")+" / 航空写真: 国土地理院";
 var ios=/iPad|iPhone|iPod/.test(navigator.userAgent),standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;if(ios&&!standalone){$("iosHelp").hidden=false;$("iosHelp").textContent="iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリのように起動できます。"}
 window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();state.prompt=e;$("install").hidden=false});$("install").onclick=async function(){if(!state.prompt)return;state.prompt.prompt();await state.prompt.userChoice;state.prompt=null;$("install").hidden=true};
 if("serviceWorker" in navigator&&window.isSecureContext)navigator.serviceWorker.register("./sw.js").catch(function(){});
