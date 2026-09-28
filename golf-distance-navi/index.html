@@ -23,7 +23,7 @@
 .osmresults{display:grid;gap:8px;margin-top:10px}.osmrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px;border:1px solid #e1e7e3;border-radius:12px;background:#fff}.osmrow.selected{border-color:#6fa386;background:#f0f7f3}.main{font-weight:800}.meta{font-size:12px;color:var(--muted);margin-top:3px}.osmmsg{margin-top:10px}.osmmsg.okmsg{background:#eef7f1;border-color:#cfe5d6;color:#174d31}.osmmsg.errmsg{background:#fff0f0;border-color:#efcdcd;color:#8d2020}
 .distanceHero{text-align:center;padding:6px 0 14px}.cap{font-size:12px;color:var(--muted);font-weight:800}.big{display:flex;align-items:baseline;justify-content:center;gap:5px;font-weight:900;line-height:1}.big .n{font-size:62px}.big .u{font-size:20px}.sub{font-size:13px;color:var(--muted);margin-top:5px}
 .mapwrap{position:relative;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#ddd}#map{height:58vh;min-height:360px;max-height:650px}.mapbtns{position:absolute;right:10px;bottom:10px;z-index:500;display:flex;gap:8px}.mapbtn{border:1px solid #0002;background:#fff;padding:0 12px}
-.shot{text-align:center;padding:12px 0 18px}.shot .n{font-size:62px}.stats,.history{display:grid;gap:8px}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #edf0ee}.row:first-child{border-top:0}.dist{font-weight:800;font-size:18px;white-space:nowrap}.del{border:0;background:#f5eded;color:#8d2020;border-radius:9px;padding:7px 9px;margin-left:8px}
+.recommendBox{background:#f2f7f4;border:1px solid #d8e6dd;border-radius:14px;padding:12px;margin:0 0 12px}.recommendTitle{font-size:12px;color:var(--muted);font-weight:800}.recommendMain{font-size:24px;font-weight:900;margin-top:3px}.recommendAlt{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.recommendChip{border:1px solid #cbd9d0;background:#fff;border-radius:999px;padding:6px 9px;font-size:12px;font-weight:800}.mapOption{display:flex;align-items:center;gap:9px;margin-top:10px;font-size:13px;font-weight:800}.mapOption input{width:21px;height:21px}.historyCount{font-size:12px;color:var(--muted);margin-left:auto}.shot{text-align:center;padding:12px 0 18px}.shot .n{font-size:62px}.stats,.history{display:grid;gap:8px}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:10px 0;border-top:1px solid #edf0ee}.row:first-child{border-top:0}.dist{font-weight:800;font-size:18px;white-space:nowrap}.del{border:0;background:#f5eded;color:#8d2020;border-radius:9px;padding:7px 9px;margin-left:8px}
 .nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:900;width:min(760px,100%);display:grid;grid-template-columns:repeat(3,1fr);background:#fffffff2;border-top:1px solid var(--line);padding:7px 4px calc(7px + var(--bottom));backdrop-filter:blur(12px)}.nav button{border:0;background:transparent;color:#67756d;min-height:54px;font-size:11px;font-weight:800;display:grid;justify-items:center;align-content:center;gap:2px;border-radius:12px}.nav button span{font-size:20px}.nav button.active{color:var(--g);background:#e9f3ed}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .dot{width:20px;height:20px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 0 0 3px #1976d247}.targetDot{width:24px;height:24px;border-radius:50%;background:#e53935;border:4px solid #fff;box-shadow:0 1px 6px #0006}.hidden{display:none!important}
@@ -41,7 +41,9 @@
     <h2>航空写真で距離測定</h2>
     <p class="help">青い丸がGPS現在地です。航空写真をタップすると赤い目標マーカーを置き、現在地からそこまでの直線距離を表示します。</p>
     <div class="distanceHero"><div class="cap">現在地 → タップ地点</div><div class="big"><span id="target" class="n">---</span><span id="targetUnit" class="u">yd</span></div><div id="targetSub" class="sub">航空写真をタップしてください</div></div>
+    <div id="clubRecommend" class="recommendBox"><div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">目標地点をタップしてください</div></div>
     <div class="mapwrap"><div id="map"></div><div class="mapbtns"><button id="recenter" class="mapbtn">現在地</button><button id="courseCenter" class="mapbtn">コース</button><button id="clearTarget" class="mapbtn">目標解除</button></div></div>
+    <label class="mapOption"><input id="showShotHistory" type="checkbox"><span>航空写真にショット履歴を表示</span><span id="mapHistoryCount" class="historyCount"></span></label>
     <div class="sourceNote">航空写真：国土地理院「全国最新写真（シームレス）」／出典：国土地理院</div>
   </div>
   <div class="panel">
@@ -109,7 +111,7 @@
 (function(){
 "use strict";
 var YD=0.9144,defaults=["Driver","3W","5W","4UT","5UT","5I","6I","7I","8I","9I","PW","AW","SW"];
-var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotStart:null,watch:null,prompt:null,continuousShot:localStorage.getItem("gdn_continuous_shot")!=="0",unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
+var state={map:null,current:null,target:null,user:null,circle:null,targetMarker:null,targetLine:null,shotLayer:null,shotStart:null,watch:null,prompt:null,showShotHistory:localStorage.getItem("gdn_show_shot_history")!=="0",continuousShot:localStorage.getItem("gdn_continuous_shot")!=="0",unit:localStorage.getItem("gdn_unit")||"yd",clubs:load("gdn_clubs",defaults),history:load("gdn_history",[]),courses:load("gdn_courses",[]),courseId:localStorage.getItem("gdn_course_id")||""};
 function $(id){return document.getElementById(id)}
 function load(k,d){try{var v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}}
 function save(k,v){localStorage.setItem(k,JSON.stringify(v))}
@@ -126,7 +128,9 @@ function initMap(){
  state.map=L.map("map",{zoomControl:false}).setView([36.5,139.9],6);
  L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",{minZoom:14,maxZoom:18,maxNativeZoom:18,attribution:'出典：<a href="https://maps.gsi.go.jp/" target="_blank" rel="noopener">国土地理院</a>'}).addTo(state.map);
  L.control.zoom({position:"topleft"}).addTo(state.map);
+ state.shotLayer=L.layerGroup().addTo(state.map);
  state.map.on("click",function(e){state.target={lat:e.latlng.lat,lng:e.latlng.lng};drawTarget();updateTarget()});
+ drawShotHistory();
 }
 function drawCurrent(){
  if(!state.map||!state.current)return;
@@ -152,10 +156,43 @@ function pos(p){
 }
 function geoErr(e){gpsStatus("GPSエラー","err");toast(e&&e.code===1?"位置情報を許可してください":"現在地を取得できません")}
 function startGps(){if(!navigator.geolocation){gpsStatus("GPS非対応","err");return}if(state.watch!==null)navigator.geolocation.clearWatch(state.watch);gpsStatus("GPS検索中","warn");state.watch=navigator.geolocation.watchPosition(pos,geoErr,{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
+function clubAverages(){
+ var g={};
+ state.history.forEach(function(r){var m=Number(r.meters);if(!r.club||!Number.isFinite(m)||m<=0)return;(g[r.club]||(g[r.club]=[])).push(m)});
+ return Object.keys(g).map(function(club){var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length;return{club:club,avg:avg,count:a.length}});
+}
+function renderClubRecommendation(targetMeters){
+ var box=$("clubRecommend");if(!box)return;
+ if(!Number.isFinite(targetMeters)){box.innerHTML='<div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">目標地点をタップしてください</div>';return}
+ var a=clubAverages().map(function(x){x.diff=Math.abs(x.avg-targetMeters);return x}).sort(function(x,y){return x.diff-y.diff}).slice(0,3);
+ if(!a.length){box.innerHTML='<div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">ショット履歴がまだありません</div><div class="meta">実測データがたまると自動で候補を表示します。</div>';return}
+ var main=a[0],targetShown=fmt(targetMeters),avgShown=fmt(main.avg);
+ var html='<div class="recommendTitle">おすすめクラブ / 目標 '+targetShown+ul()+'</div><div class="recommendMain">'+main.club+' <span class="meta">平均 '+avgShown+ul()+' / '+main.count+'球</span></div>';
+ if(a.length>1){html+='<div class="recommendAlt">'+a.slice(1).map(function(x){return'<span class="recommendChip">'+x.club+' '+fmt(x.avg)+ul()+'</span>'}).join("")+'</div>'}
+ box.innerHTML=html;
+}
+function validPoint(p){return p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))}
+function drawShotHistory(){
+ if(!state.map||!state.shotLayer)return;
+ state.shotLayer.clearLayers();
+ var count=0;
+ if(state.showShotHistory){
+   state.history.slice().reverse().forEach(function(r){
+     if(!validPoint(r.start)||!validPoint(r.end))return;
+     if(state.courseId&&r.courseId!==state.courseId)return;
+     var line=L.polyline([[Number(r.start.lat),Number(r.start.lng)],[Number(r.end.lat),Number(r.end.lng)]],{weight:4,opacity:.8});
+     line.bindTooltip((r.club||"")+" "+fmt(Number(r.meters))+ul(),{sticky:true});
+     line.addTo(state.shotLayer);
+     L.circleMarker([Number(r.end.lat),Number(r.end.lng)],{radius:5,weight:2,fillOpacity:.8}).bindTooltip((r.club||"")+" "+fmt(Number(r.meters))+ul()).addTo(state.shotLayer);
+     count++;
+   });
+ }
+ if($("mapHistoryCount"))$("mapHistoryCount").textContent=count?count+"打":"";
+}
 function updateTarget(){
  $("targetUnit").textContent=ul();
- if(!state.current||!state.target){$("target").textContent="---";$("targetSub").textContent=!state.current?"GPSを取得してください":"航空写真をタップしてください";drawLine();return}
- var m=hav(state.current,state.target);$("target").textContent=fmt(m);$("targetSub").textContent="直線距離 "+m.toFixed(1)+"m";drawLine();
+ if(!state.current||!state.target){$("target").textContent="---";$("targetSub").textContent=!state.current?"GPSを取得してください":"航空写真をタップしてください";renderClubRecommendation(NaN);drawLine();return}
+ var m=hav(state.current,state.target);$("target").textContent=fmt(m);$("targetSub").textContent="直線距離 "+m.toFixed(1)+"m";renderClubRecommendation(m);drawLine();
 }
 function clearTarget(){state.target=null;if(state.targetMarker&&state.map){state.map.removeLayer(state.targetMarker);state.targetMarker=null}drawLine();updateTarget()}
 function recenter(){if(state.current&&state.map)state.map.setView([state.current.lat,state.current.lng],18);else startGps()}
@@ -183,7 +220,7 @@ function renderCourseSelect(){
 function updateCourseLabel(){var c=currentCourse();$("activeCourseLabel").textContent=c?"使用コース: "+c.name:""}
 function changeCourse(id){
  state.courseId=id||"";if(state.courseId)localStorage.setItem("gdn_course_id",state.courseId);else localStorage.removeItem("gdn_course_id");
- renderCourseSelect();updateCourseLabel();if(state.courseId)focusSelectedCourse();
+ renderCourseSelect();updateCourseLabel();drawShotHistory();if(state.courseId)focusSelectedCourse();
 }
 function newCourse(){var name=prompt("コース名を入力してください");if(name===null)return;name=name.trim();if(!name)return;var c={id:"c"+Date.now(),name:name,source:{provider:"manual"}};state.courses.push(c);save("gdn_courses",state.courses);state.courseId=c.id;localStorage.setItem("gdn_course_id",c.id);renderCourseSelect();toast(name+" を追加しました")}
 function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコースを選択してください");return}if(!confirm(c.name+" を削除しますか？"))return;state.courses=state.courses.filter(function(x){return x.id!==c.id});save("gdn_courses",state.courses);state.courseId="";localStorage.removeItem("gdn_course_id");renderCourseSelect();toast("コースを削除しました")}
@@ -200,7 +237,7 @@ function finishShot(){
  var m=hav(state.shotStart,state.current);
  if(m<1){toast("移動距離が短すぎます");return}
  var club=$("club").value,end={lat:state.current.lat,lng:state.current.lng};
- state.history.unshift({id:Date.now(),club:club,meters:m,at:new Date().toISOString(),accuracy:state.current.accuracy||null,courseId:state.courseId||""});
+ state.history.unshift({id:Date.now(),club:club,meters:m,at:new Date().toISOString(),accuracy:state.current.accuracy||null,courseId:state.courseId||"",start:{lat:Number(state.shotStart.lat),lng:Number(state.shotStart.lng)},end:{lat:Number(end.lat),lng:Number(end.lng)}});
  state.history=state.history.slice(0,500);save("gdn_history",state.history);renderRecords();
  if(state.continuousShot){
    state.shotStart=end;
@@ -211,7 +248,7 @@ function finishShot(){
    cancelShot();
  }
 }
-function renderRecords(){var s=$("stats"),h=$("history");s.innerHTML="";h.innerHTML="";if(!state.history.length){s.innerHTML='<div class="empty">まだショット記録がありません。</div>';h.innerHTML='<div class="empty">ショットを計測するとここに保存されます。</div>';return}var g={};state.history.forEach(function(r){(g[r.club]||(g[r.club]=[])).push(r.meters)});Object.keys(g).forEach(function(club){var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length,mx=Math.max.apply(null,a),r=document.createElement("div");r.className="row";r.innerHTML='<div><div class="main">'+club+'</div><div class="meta">'+a.length+'球 / 最大 '+fmt(mx)+ul()+'</div></div><div class="dist">'+fmt(avg)+ul()+'</div>';s.appendChild(r)});state.history.slice(0,80).forEach(function(x){var c=state.courses.find(function(v){return v.id===x.courseId}),r=document.createElement("div"),l=document.createElement("div"),rr=document.createElement("div"),d=document.createElement("span"),b=document.createElement("button");r.className="row";l.innerHTML='<div class="main">'+x.club+'</div><div class="meta">'+new Date(x.at).toLocaleString("ja-JP")+(c?" / "+c.name:"")+'</div>';d.className="dist";d.textContent=fmt(x.meters)+ul();b.className="del";b.textContent="削除";b.onclick=function(){state.history=state.history.filter(function(v){return v.id!==x.id});save("gdn_history",state.history);renderRecords()};rr.append(d,b);r.append(l,rr);h.appendChild(r)})}
+function renderRecords(){var s=$("stats"),h=$("history");s.innerHTML="";h.innerHTML="";if(!state.history.length){s.innerHTML='<div class="empty">まだショット記録がありません。</div>';h.innerHTML='<div class="empty">ショットを計測するとここに保存されます。</div>';return}var g={};state.history.forEach(function(r){(g[r.club]||(g[r.club]=[])).push(r.meters)});Object.keys(g).forEach(function(club){var a=g[club],avg=a.reduce(function(x,y){return x+y},0)/a.length,mx=Math.max.apply(null,a),r=document.createElement("div");r.className="row";r.innerHTML='<div><div class="main">'+club+'</div><div class="meta">'+a.length+'球 / 最大 '+fmt(mx)+ul()+'</div></div><div class="dist">'+fmt(avg)+ul()+'</div>';s.appendChild(r)});state.history.slice(0,80).forEach(function(x){var c=state.courses.find(function(v){return v.id===x.courseId}),r=document.createElement("div"),l=document.createElement("div"),rr=document.createElement("div"),d=document.createElement("span"),b=document.createElement("button");r.className="row";l.innerHTML='<div class="main">'+x.club+'</div><div class="meta">'+new Date(x.at).toLocaleString("ja-JP")+(c?" / "+c.name:"")+'</div>';d.className="dist";d.textContent=fmt(x.meters)+ul();b.className="del";b.textContent="削除";b.onclick=function(){state.history=state.history.filter(function(v){return v.id!==x.id});save("gdn_history",state.history);renderRecords()};rr.append(d,b);r.append(l,rr);h.appendChild(r)});drawShotHistory();if(state.current&&state.target)renderClubRecommendation(hav(state.current,state.target))}
 function saveSettings(){state.unit=$("unit").value;localStorage.setItem("gdn_unit",state.unit);var a=$("clubEdit").value.split(/\r?\n/).map(function(x){return x.trim()}).filter(Boolean);if(!a.length){toast("クラブを1つ以上入力してください");return}state.clubs=Array.from(new Set(a));save("gdn_clubs",state.clubs);renderClubs();updateTarget();updateShot();renderRecords();toast("設定を保存しました")}
 function exportCsv(){if(!state.history.length){toast("出力する記録がありません");return}var rows=[["日時","コース","クラブ","距離(m)","距離(yd)","GPS精度(m)"]];state.history.forEach(function(r){var c=state.courses.find(function(v){return v.id===r.courseId});rows.push([new Date(r.at).toLocaleString("ja-JP"),c?c.name:"",r.club,r.meters.toFixed(1),(r.meters/YD).toFixed(1),r.accuracy==null?"":Math.round(r.accuracy)])});var q=function(v){return '"'+String(v).replaceAll('"','""')+'"'};downloadBlob("\ufeff"+rows.map(function(r){return r.map(q).join(",")}).join("\r\n"),"golf-shot-history.csv","text/csv;charset=utf-8")}
 function downloadBlob(content,name,type){var blob=new Blob([content],{type:type}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}
@@ -226,9 +263,11 @@ $("exportCourses").onclick=exportCourses;$("importCourses").onclick=function(){$
 $("startShot").onclick=startShot;$("finishShot").onclick=finishShot;$("cancelShot").onclick=cancelShot;
 $("continuousShot").checked=state.continuousShot;
 $("continuousShot").onchange=function(){state.continuousShot=this.checked;localStorage.setItem("gdn_continuous_shot",this.checked?"1":"0");toast(this.checked?"連続ショット計測をONにしました":"連続ショット計測をOFFにしました")};
+$("showShotHistory").checked=state.showShotHistory;
+$("showShotHistory").onchange=function(){state.showShotHistory=this.checked;localStorage.setItem("gdn_show_shot_history",this.checked?"1":"0");drawShotHistory()};
 $("saveSettings").onclick=saveSettings;$("csv").onclick=exportCsv;$("clearHistory").onclick=function(){if(confirm("ショット履歴をすべて削除しますか？")){state.history=[];save("gdn_history",[]);renderRecords()}};
 
-$("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();initMap();updateCourseLabel();
+$("unit").value=state.unit;renderClubs();renderRecords();renderCourseSelect();initMap();updateCourseLabel();updateTarget();
 var ios=/iPad|iPhone|iPod/.test(navigator.userAgent),standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;if(ios&&!standalone){$("iosHelp").hidden=false;$("iosHelp").textContent="iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリのように起動できます。"}
 window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();state.prompt=e;$("install").hidden=false});$("install").onclick=async function(){if(!state.prompt)return;state.prompt.prompt();await state.prompt.userChoice;state.prompt=null;$("install").hidden=true};
 if("serviceWorker" in navigator&&window.isSecureContext)navigator.serviceWorker.register("./sw.js").catch(function(){});
