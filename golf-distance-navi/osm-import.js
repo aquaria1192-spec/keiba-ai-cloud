@@ -69,7 +69,7 @@ function registerSelected(){
   var courses=read("gdn_courses",[]);
   var id="osm-"+String(selected.osm_type||"x")+"-"+String(selected.osm_id||selected.name);
   var center=(Number.isFinite(Number(selected.lat))&&Number.isFinite(Number(selected.lon)))?{lat:Number(selected.lat),lng:Number(selected.lon)}:null;
-  var course={id:id,name:selected.name,source:{provider:"OpenStreetMap",osmType:selected.osm_type||"",osmId:selected.osm_id||"",courseCenter:center}};
+  var course={id:id,name:selected.name,source:{provider:"OpenStreetMap",osmType:selected.osm_type||"",osmId:selected.osm_id||"",courseCenter:center,names:selected.names||{}}};
   var idx=courses.findIndex(function(c){return c.id===id});
   if(idx>=0){
     course.source=Object.assign({},courses[idx].source||{},course.source);
