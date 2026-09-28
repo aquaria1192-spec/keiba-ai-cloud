@@ -49,7 +49,11 @@ jobs:
                   seed = []
 
           query = """[out:json][timeout:90];
-          nwr["leisure"="golf_course"](20.0,122.0,46.0,154.0);
+          (
+            nwr["leisure"="golf_course"](20.0,122.0,46.0,154.0);
+            nwr["sport"="golf"]["name"](20.0,122.0,46.0,154.0);
+            relation["golf"="course"]["name"](20.0,122.0,46.0,154.0);
+          );
           out tags center;"""
           endpoints = [
               "https://overpass-api.de/api/interpreter",
@@ -92,6 +96,8 @@ jobs:
                   }
                   name = next((v for v in names.values() if v), "")
                   if not name:
+                      continue
+                  if tags.get("leisure") == "driving_range" or tags.get("golf") == "driving_range":
                       continue
                   if "ゴルフ練習場" in name or "driving range" in name.lower():
                       continue
