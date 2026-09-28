@@ -70,7 +70,7 @@
     <div class="field"><label for="courseSelect">使用するコース</label><select id="courseSelect"><option value="">コースを選択</option></select></div>
     <div id="courseParBox" class="courseParBox hidden">
       <div class="head"><h2 style="margin:0">18ホール PAR設定</h2><button id="resetCoursePars" class="link">初期化</button></div>
-      <p class="help" style="margin-top:8px">PARは公開時に事前取得したOpenStreetMapデータから読み込みます。外部通信を待たないため、取得できない場合もすぐ手動設定へ進めます。</p>
+      <p class="help" style="margin-top:8px">まず事前取得済みデータを確認し、無い場合は公式サイトのコースガイド／スコアカードから18ホールPARの取得を試みます。判定できない場合は手動設定できます。</p>
       <div id="courseParStatus" class="notice" style="margin:8px 0">PAR情報を確認しています。</div>
       <div id="courseParGrid" class="courseParGrid"></div>
       <div class="courseParTotal"><span>合計PAR</span><span id="courseParTotal">72</span></div>
@@ -289,6 +289,7 @@ function renderCourseParEditor(){
     var count=known.filter(Boolean).length;
     if(provider==="OpenStreetMapIndex"&&count===18)status.textContent="事前取得済みデータから18/18ホールのPARを反映済みです。";
     else if(provider==="OpenStreetMapIndex"&&count>0)status.textContent="事前取得済みデータから"+count+"/18ホールを反映しました。黄色のホールは手動で確認してください。";
+    else if(provider==="OfficialWebsite"&&count===18)status.textContent="公式サイトから18/18ホールのPARを取得済みです。";
     else if(provider==="manual")status.textContent="このコースのPARは手動設定で保存済みです。";
     else if(c.source&&Array.isArray(c.source.pars)&&c.source.pars.length===18)status.textContent="保存済みのPARを使用します。";
     else status.textContent="PAR未取得です。「PAR自動取得」を押すか、各ホールを手動設定してください。";
@@ -360,19 +361,125 @@ function applyLocalPars(c,rec){
   c.source.parKnown=known;
   c.source.parProvider="OpenStreetMapIndex";
   c.source.parCount=count;
+  if(rec.website&&!c.source.website)c.source.website=rec.website;
   save("gdn_courses",state.courses);
   renderCourseParEditor();
   return count;
+}
+function normalizeOfficialUrl(v){
+  v=String(v||"").trim();
+  if(!v)return "";
+  if(/^\/\//.test(v))v="https:"+v;
+  if(!/^https?:\/\//i.test(v))v="https://"+v;
+  try{return new URL(v).href}catch(e){return ""}
+}
+async function readerFetch(url,timeoutMs){
+  var target=normalizeOfficialUrl(url);if(!target)throw new Error("url");
+  var controller=new AbortController(),timer=setTimeout(function(){controller.abort()},timeoutMs||10000);
+  try{
+    var r=await fetch("https://r.jina.ai/"+target,{cache:"no-store",signal:controller.signal,headers:{"Accept":"text/plain"}});
+    clearTimeout(timer);
+    if(!r.ok)throw new Error("reader");
+    return await r.text();
+  }catch(e){clearTimeout(timer);throw e}
+}
+function extractParsFromOfficialText(text){
+  text=String(text||"").normalize("NFKC");
+  var map={},lines=text.split(/\r?\n/);
+  function put(h,p){h=Number(h);p=Number(p);if(h>=1&&h<=18&&p>=3&&p<=6&&!map[h])map[h]=p}
+  var patterns=[
+    /(?:HOLE|ホール)\s*[:#.-]?\s*(1[0-8]|[1-9])[^\n]{0,100}?\bPAR\s*[:#.-]?\s*([3-6])\b/gi,
+    /\b(1[0-8]|[1-9])\s*(?:H|HOLE|ホール)\b[^\n]{0,100}?\bPAR\s*[:#.-]?\s*([3-6])\b/gi,
+    /\b(1[0-8]|[1-9])\s*番ホール[^\n]{0,100}?\bPAR\s*[:#.-]?\s*([3-6])\b/gi
+  ];
+  patterns.forEach(function(re){var m;while((m=re.exec(text)))put(m[1],m[2])});
+  for(var i=0;i<lines.length;i++){
+    var line=lines[i];
+    if(!/(?:HOLE|ホール)/i.test(line))continue;
+    var holes=(line.match(/\b(?:1[0-8]|[1-9])\b/g)||[]).map(Number);
+    if(holes.length<6)continue;
+    for(var j=i+1;j<Math.min(lines.length,i+8);j++){
+      if(!/\bPAR\b/i.test(lines[j]))continue;
+      var pars=(lines[j].match(/\b[3-6]\b/g)||[]).map(Number);
+      if(pars.length<6)continue;
+      var n=Math.min(holes.length,pars.length);
+      for(var k=0;k<n;k++)put(holes[k],pars[k]);
+      break;
+    }
+  }
+  var arr=[],known=[],count=0;
+  for(var h=1;h<=18;h++){var p=map[h]||null;arr.push(p);known.push(!!p);if(p)count++}
+  return{pars:arr,known:known,count:count};
+}
+function officialCourseLinks(text,baseUrl){
+  var out=[],seen=new Set(),base;
+  try{base=new URL(baseUrl)}catch(e){return out}
+  var re=/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g,m;
+  while((m=re.exec(String(text||"")))){
+    try{
+      var u=new URL(m[2]),label=(m[1]+" "+u.pathname).normalize("NFKC").toLowerCase();
+      var same=u.hostname===base.hostname||u.hostname.endsWith("."+base.hostname)||base.hostname.endsWith("."+u.hostname);
+      if(!same)continue;
+      if(!/(コース|course|layout|guide|hole|score|yard|ヤード)/i.test(label))continue;
+      var href=u.href.replace(/#.*$/,"");
+      if(!seen.has(href)){seen.add(href);out.push(href)}
+    }catch(e){}
+  }
+  ["/course/","/course-guide/","/courseguide/","/layout/","/scorecard/"].forEach(function(path){
+    try{var href=new URL(path,base).href;if(!seen.has(href)){seen.add(href);out.push(href)}}catch(e){}
+  });
+  return out.slice(0,5);
+}
+function applyOfficialPars(c,got,url){
+  if(!c||!got||got.count!==18)return false;
+  c.source=c.source||{};
+  c.source.pars=got.pars.map(Number);
+  c.source.parKnown=Array(18).fill(true);
+  c.source.parProvider="OfficialWebsite";
+  c.source.parSourceUrl=url;
+  save("gdn_courses",state.courses);
+  renderCourseParEditor();
+  return true;
+}
+async function fetchOfficialCoursePars(c,rec){
+  var website=normalizeOfficialUrl((c.source&&c.source.website)||(rec&&rec.website)||"");
+  if(!website)return false;
+  c.source=c.source||{};c.source.website=website;save("gdn_courses",state.courses);
+  var status=$("courseParStatus");
+  if(status)status.textContent="公式サイトのコース情報を確認しています…";
+  try{
+    var home=await readerFetch(website,10000),got=extractParsFromOfficialText(home);
+    if(got.count===18)return applyOfficialPars(c,got,website);
+    var links=officialCourseLinks(home,website);
+    if(!links.length)return false;
+    if(status)status.textContent="公式サイトのコースガイドを確認しています…";
+    var jobs=links.map(function(u){return readerFetch(u,10000).then(function(t){return{url:u,text:t}}).catch(function(){return null})});
+    var pages=await Promise.all(jobs);
+    for(var i=0;i<pages.length;i++){
+      if(!pages[i])continue;
+      got=extractParsFromOfficialText(pages[i].text);
+      if(got.count===18)return applyOfficialPars(c,got,pages[i].url);
+    }
+  }catch(e){}
+  return false;
 }
 async function autoFetchCoursePars(c,force){
   if(!c)return false;
   if(!force&&c.source&&c.source.parProvider==="manual"&&Array.isArray(c.source.pars)&&c.source.pars.length===18)return true;
   try{
-    var list=await loadLocalCourseIndex(),rec=findLocalCourseRecord(c,list),count=applyLocalPars(c,rec);
-    if(!count)return false;
-    if(count===18)toast(c.name+" のPARを18ホール取得しました");
-    else toast(c.name+" のPARを"+count+"/18ホール取得しました");
-    return true;
+    var list=await loadLocalCourseIndex(),rec=findLocalCourseRecord(c,list);
+    if(rec&&rec.website&&!c.source.website){c.source=c.source||{};c.source.website=rec.website;save("gdn_courses",state.courses)}
+    var count=applyLocalPars(c,rec);
+    if(count){
+      if(count===18)toast(c.name+" のPARを18ホール取得しました");
+      else toast(c.name+" のPARを"+count+"/18ホール取得しました");
+      return true;
+    }
+    if(force){
+      var official=await fetchOfficialCoursePars(c,rec);
+      if(official){toast(c.name+" の公式サイトからPARを取得しました");return true}
+    }
+    return false;
   }catch(e){return false}
 }
 async function ensureSelectedCoursePars(){
@@ -384,18 +491,18 @@ async function ensureSelectedCoursePars(){
 async function retryCoursePars(){
   var c=currentCourse();if(!c){toast("コースを選択してください");return}
   var b=$("autoCoursePars"),status=$("courseParStatus");if(b)b.disabled=true;
-  if(status)status.textContent="事前取得済みのPARデータを確認しています…";
+  if(status)status.textContent="事前取得済みPARを確認しています…";
   try{
     var ok=await autoFetchCoursePars(c,true);
     if(!ok){
       renderCourseParEditor();
-      if(status)status.textContent="このコースのホール別PARは公開データにありません。下で手動設定して保存できます。";
-      toast("公開PARデータがありません");
+      if(status)status.textContent="自動取得できませんでした。公式サイトでも18ホールを判定できないため、下で手動設定してください。";
+      toast("PARを自動取得できませんでした");
     }
   }catch(e){
     renderCourseParEditor();
-    if(status)status.textContent="PARデータを読み込めませんでした。手動設定をご利用ください。";
-    toast("PARデータを読み込めませんでした");
+    if(status)status.textContent="PAR取得を終了しました。手動設定をご利用ください。";
+    toast("PAR取得を終了しました");
   }finally{
     if(b)b.disabled=false;
   }
