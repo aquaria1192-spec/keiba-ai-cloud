@@ -139,8 +139,87 @@ def _decode_html(content: bytes) -> str:
             pass
     return content.decode("utf-8", errors="replace")
 
+def _daily_race_date(html: str) -> date|None:
+    """Read the calendar date shown on a Daily race-card page."""
+    text = BeautifulSoup(html or "", "lxml").get_text(" ", strip=True)
+    m = re.search(r"(20\d{2})/(\d{1,2})/(\d{1,2})", text)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+def _discover_race_ids_daily(target_date: date, session=None, timeout=15) -> list[str]:
+    """
+    Secondary race-list discovery using Daily.
+
+    netkeiba's race-list page can be rendered dynamically and may expose no
+    race_id values to a plain HTTP client. Daily's race index still exposes
+    race_id links. We verify each meeting prefix against the date printed on
+    an actual race-card page before returning generated 1R-12R IDs.
+    """
+    s = session or _session()
+    old_ref = s.headers.get("Referer")
+    try:
+        s.headers["Referer"] = "https://www.daily.co.jp/umaya/"
+        r = s.get("https://www.daily.co.jp/umaya/race/", timeout=timeout)
+        r.raise_for_status()
+        r.encoding = r.apparent_encoding or "utf-8"
+        ids = sorted(set(re.findall(r"race_id=(\d{12})", r.text)))
+
+        prefixes = {}
+        for rid in ids:
+            if rid[:4] != target_date.strftime("%Y"):
+                continue
+            if rid[4:6] not in VENUE_CODE:
+                continue
+            try:
+                rn = int(rid[-2:])
+            except Exception:
+                continue
+            if 1 <= rn <= 12:
+                prefixes.setdefault(rid[:10], []).append(rid)
+
+        matched = []
+        for prefix, rids in sorted(prefixes.items()):
+            seed = sorted(rids, key=lambda x: int(x[-2:]))[0]
+            try:
+                u = (
+                    "https://www.daily.co.jp/umaya/race/shutsuba.shtml"
+                    f"?race_id={seed}"
+                )
+                rr = s.get(u, timeout=timeout)
+                rr.raise_for_status()
+                rr.encoding = rr.apparent_encoding or "utf-8"
+                if _daily_race_date(rr.text) != target_date:
+                    continue
+                # JRA meetings normally expose 1R-12R. The later fetch step
+                # validates every generated ID, so a cancelled/nonexistent
+                # race is simply skipped with a diagnostic instead of
+                # poisoning discovery for the whole day.
+                matched.extend(
+                    f"{prefix}{race_no:02d}" for race_no in range(1, 13)
+                )
+            except Exception:
+                continue
+
+        return sorted(set(matched))
+    except Exception:
+        return []
+    finally:
+        if old_ref:
+            s.headers["Referer"] = old_ref
+
 def discover_race_ids(target_date: date, session=None, timeout=15) -> list[str]:
-    """Discover all JRA race IDs on a date from the public race-list page."""
+    """
+    Discover all JRA race IDs on a date.
+
+    Priority:
+      1) netkeiba race-list page
+      2) Daily race index + date-verified race-card pages
+      3) bundled known-day fallback
+    """
     s = session or _session()
     ymd = target_date.strftime("%Y%m%d")
     url = f"https://race.netkeiba.com/top/race_list.html?kaisai_date={ymd}"
@@ -166,6 +245,11 @@ def discover_race_ids(target_date: date, session=None, timeout=15) -> list[str]:
             return good
     except Exception:
         pass
+
+    daily = _discover_race_ids_daily(target_date, s, timeout=timeout)
+    if daily:
+        return daily
+
     return list(KNOWN_RACE_DAYS.get(target_date.isoformat(), []))
 
 def _flatten_columns(df):
