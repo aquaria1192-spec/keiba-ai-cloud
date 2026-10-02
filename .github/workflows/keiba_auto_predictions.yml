@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - fix/known-race-days-oct3
   workflow_dispatch:
     inputs:
       mode:
