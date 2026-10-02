@@ -60,6 +60,7 @@ jobs:
           from race_day_context import _race_no_int_safe
           from model_compare import _calibrate_histgb_probabilities
           from auto_data_builder import _discover_race_ids_daily, fetch_race_entries, _session
+          from cloud_data_builder import fetch_entries_cloud
           from datetime import date
           import automation_runner
           import online_learning
@@ -83,6 +84,16 @@ jobs:
           )
           assert len(sample_entries) >= 5
           assert set(sample_entries["date"].astype(str)) == {"2026-10-03"}
+
+          # Exercise the same full-day loader used by Streamlit.
+          live_entries,live_info=fetch_entries_cloud(
+              live_date,request_interval=0
+          )
+          assert live_info["races"] >= 20, live_info
+          assert len(live_entries) >= 150, live_info
+          assert {"東京","京都"}.issubset(
+              set(live_entries["course"].astype(str))
+          ), sorted(set(live_entries["course"].astype(str)))
 
           import joblib
           pkg=joblib.load("data/cloud_model.joblib")
