@@ -94,6 +94,10 @@ jobs:
           assert {"東京","京都"}.issubset(
               set(live_entries["course"].astype(str))
           ), sorted(set(live_entries["course"].astype(str)))
+          assert not (
+              (live_entries["course"].astype(str)=="東京") &
+              (live_entries["race_no"].astype(str).str.replace("R","",regex=False)=="4")
+          ).any(), "2026-10-03 東京4Rは障害競走なのでAI対象外"
 
           import joblib
           pkg=joblib.load("data/cloud_model.joblib")
