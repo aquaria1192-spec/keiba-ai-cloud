@@ -466,6 +466,11 @@ def parse_daily_shutuba_html(html: str, race_id: str, target_date: date) -> pd.D
     race_name = title.get_text(" ", strip=True) if title else f"{race_no}R"
     race_name = re.sub(r"^サラ\S*\s*", "", race_name).strip() or f"{race_no}R"
 
+    # Daily writes jump races as e.g. "芝ダート3100m". The base AI
+    # is trained on flat races only, so never reinterpret that notation as turf.
+    if re.search(r"芝\s*ダート\s*\d{3,4}m", text) or "障害" in text:
+        return pd.DataFrame(columns=ENTRY_COLS)
+
     meta_match = re.search(
         r"\d{4}/\d{1,2}/\d{1,2}.*?(芝|ダート).*?(\d{3,4})m",
         text
