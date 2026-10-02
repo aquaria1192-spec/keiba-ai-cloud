@@ -1,6 +1,9 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
+  push:
+    branches:
+      - fix/known-race-days-oct3
   workflow_dispatch:
     inputs:
       mode:
@@ -56,7 +59,10 @@ jobs:
           import pandas as pd
           from race_day_context import _race_no_int_safe
           from model_compare import _calibrate_histgb_probabilities
-          from auto_data_builder import _discover_race_ids_daily, fetch_race_entries, _session
+          from auto_data_builder import (
+              _discover_race_ids_daily, discover_race_ids,
+              fetch_race_entries, _session
+          )
           from cloud_data_builder import fetch_entries_cloud
           from datetime import date
           import automation_runner
@@ -72,6 +78,19 @@ jobs:
           # Live discovery regression: 2026-10-03 must be discoverable even
           # when the primary race-list source does not expose static race_id links.
           live_date=date(2026,10,3)
+
+          # Simulate Streamlit being unable to access both race-list sources.
+          class BlockedSession:
+              headers={}
+              def get(self,*args,**kwargs):
+                  raise RuntimeError("blocked list source")
+          fallback_ids=discover_race_ids(
+              live_date,BlockedSession(),timeout=1
+          )
+          assert len(fallback_ids)==24, fallback_ids
+          assert "202605040101" in fallback_ids
+          assert "202608040112" in fallback_ids
+
           daily_ids=_discover_race_ids_daily(live_date,_session(),timeout=20)
           assert "202605040101" in daily_ids, daily_ids[:10]
           assert "202608040101" in daily_ids, daily_ids[:10]
