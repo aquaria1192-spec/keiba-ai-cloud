@@ -28,12 +28,19 @@
 
 ## 学習データ
 
-GitHub の `prediction-history` ブランチに次を保存する。
+保存パスは共通して次を使う。
 
 - `automation_data/learning/pre_race_feature_rows.csv`
 - `automation_data/learning/status.json`
 - `automation_data/learning/adapter_metrics.json`
 - 採用時のみ `automation_data/learning/online_adapter.joblib`
+
+保存先は運用経路ごとに分ける。
+
+- Streamlitの開催地一括予想・手動答え合わせ: 予想履歴と同じ `GITHUB_HISTORY_REPO`
+- GitHub Actionsの朝/発走前予想・自動結果照合: アプリ本体の `prediction-history` ブランチ
+
+Streamlitでは一括予想を固定保存する同じ瞬間に、学習用特徴量も固定する。答え合わせ時は予想履歴CSVへ確定着順を書き込み、GitHubから再読込して保存を検証した後、同じ結果を学習行へ付与する。保存済み学習行が増えた場合は、その場で challenger 評価条件も確認する。
 
 レース前に以下を固定する。
 
