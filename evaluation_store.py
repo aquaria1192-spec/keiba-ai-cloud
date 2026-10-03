@@ -658,16 +658,16 @@ def settle_day_snapshots(
     race_id_map=None,
     expected_races=None,
     progress_callback=None,
+    learning_store=None,
+    run_learning=True,
 ):
     """
-    Check all races for one day in one operation.
+    Check all races for one day, persist the official results, and optionally
+    attach those results to the frozen pre-race learning rows.
 
-    expected_races:
-      iterable of (course, race_no). When supplied, races with no saved
-      prediction are included in the report as "予想履歴なし".
-
-    The course_batch snapshot is evaluated first; other prediction types are fallback only.
-    The history file is saved once after the entire day is processed.
+    The course_batch snapshot is evaluated first; other prediction types are
+    fallback only. Prediction history and learning rows are each written once
+    after the whole day is processed.
     """
     hist=backend.load()
     if hist.empty and not expected_races:
@@ -675,7 +675,16 @@ def settle_day_snapshots(
 
     date_iso=str(date_iso)
 
-    # Saved races for the requested day.
+    learning=None
+    learning_changed=False
+    learning_error=""
+    if learning_store is not None:
+        try:
+            from online_learning import load_learning_rows
+            learning=load_learning_rows(learning_store)
+        except Exception as e:
+            learning_error=f"学習データ読込失敗: {e}"
+
     saved=[]
     if not hist.empty:
         q=hist[hist["date"].astype(str)==date_iso].copy()
@@ -686,7 +695,6 @@ def settle_day_snapshots(
                 .itertuples(index=False,name=None)
             )
 
-    # Union with all races in the day's entry data.
     pairs=[]
     seen=set()
     for item in list(expected_races or []) + saved:
@@ -702,13 +710,26 @@ def settle_day_snapshots(
     if not pairs:
         raise RuntimeError("この開催日の予想履歴がありません。")
 
-    # Sort by venue then numeric race number.
     pairs=sorted(pairs,key=lambda x:(x[0],_race_no_int(x[1])))
 
     rows=[]
     changed=False
+    settled_sids=[]
     total=len(pairs)
     now=datetime.now(JST).isoformat(timespec="seconds")
+
+    def _apply_learning_labels(snapshot_id,finish_map,result_url):
+        nonlocal learning,learning_changed,learning_error
+        if learning_store is None or learning is None:
+            return
+        try:
+            from online_learning import apply_learning_result
+            learning,learn_changed=apply_learning_result(
+                learning,snapshot_id,finish_map,result_url,now
+            )
+            learning_changed=learning_changed or bool(learn_changed)
+        except Exception as e:
+            learning_error=f"学習ラベル反映失敗: {e}"
 
     for i,(course,race_no) in enumerate(pairs, start=1):
         if progress_callback:
@@ -737,8 +758,20 @@ def settle_day_snapshots(
         actual=pd.to_numeric(snap["actual_finish"],errors="coerce")
         finish_done=int(actual.notna().sum()) >= 3
 
-        # Answer checking is result-only: no ticket reconstruction or payout/ROI.
         if finish_done:
+            finish_map={}
+            for _,r in snap.iterrows():
+                no=pd.to_numeric(
+                    pd.Series([r.get("horse_no")]),errors="coerce"
+                ).iloc[0]
+                fi=pd.to_numeric(
+                    pd.Series([r.get("actual_finish")]),errors="coerce"
+                ).iloc[0]
+                if pd.notna(no) and pd.notna(fi):
+                    finish_map[int(no)]=int(fi)
+            _apply_learning_labels(
+                sid,finish_map,str(snap.iloc[0].get("result_url","") or "")
+            )
             answer=_main_answer_fields(snap)
             rows.append({
                 "競馬場":course,"レース":race_no,
@@ -797,6 +830,10 @@ def settle_day_snapshots(
                 continue
 
             changed=True
+            settled_sids.append(sid)
+            _apply_learning_labels(
+                sid,finish_map,result.get("result_url","")
+            )
             answer=_main_answer_fields(hist.loc[mask])
             rows.append({
                 "競馬場":course,"レース":race_no,
@@ -814,9 +851,44 @@ def settle_day_snapshots(
                 "メッセージ":str(e),
             })
 
-    # One write for the whole day.
+    save_info={"mode":getattr(backend,"mode","")}
     if changed:
-        backend.save(hist)
+        save_info=backend.save(hist) or save_info
+
+        # Do not merely assume the write worked. Reload the persistent backend
+        # and confirm that every newly settled snapshot still has result rows.
+        verified=backend.load()
+        for sid in settled_sids:
+            q=verified[verified["snapshot_id"].astype(str)==str(sid)]
+            n=int(pd.to_numeric(q["actual_finish"],errors="coerce").notna().sum())
+            if n < 3:
+                raise RuntimeError(
+                    f"答え合わせ結果の保存確認に失敗しました: {sid}"
+                )
+
+    learning_saved=False
+    if learning_store is not None and learning is not None and learning_changed:
+        try:
+            from online_learning import save_learning_rows
+            save_learning_rows(
+                learning_store,learning,
+                f"Save answer-check learning labels {date_iso}"
+            )
+            learning_saved=True
+        except Exception as e:
+            learning_error=f"学習データ保存失敗: {e}"
+
+    learning_result={}
+    if (
+        learning_store is not None and
+        learning_saved and
+        run_learning
+    ):
+        try:
+            from online_learning import run_online_learning
+            learning_result=run_online_learning(learning_store) or {}
+        except Exception as e:
+            learning_error=f"AI強化判定失敗: {e}"
 
     report=pd.DataFrame(rows)
     counts=report["状態"].value_counts().to_dict() if len(report) else {}
@@ -841,6 +913,12 @@ def settle_day_snapshots(
         "main_win_rate":win_hits/evaluated_races if evaluated_races else np.nan,
         "main_second_rate":second_hits/evaluated_races if evaluated_races else np.nan,
         "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
+        "save_mode":save_info.get("mode",getattr(backend,"mode","")),
+        "saved_result_races":len(settled_sids),
+        "save_verified":bool(not changed or settled_sids),
+        "learning_saved":learning_saved,
+        "learning_error":learning_error,
+        "learning_result":learning_result,
         "report":report,
     }
 
