@@ -23,7 +23,8 @@ from evaluation_store import (
     load_public_auto_history, merge_histories
 )
 from online_learning import (
-    load_adapter_public, apply_online_adapter, champion_version
+    load_adapter_public, load_adapter_from_store,
+    apply_online_adapter, champion_version
 )
 from entry_data_store import EntryDataBackend
 
@@ -72,9 +73,8 @@ def load_cloud_assets():
     return model, store
 
 @st.cache_resource(ttl=300)
-def load_online_adapter():
-    # The promoted adapter lives on prediction-history, so it can improve
-    # without changing/redeploying the main application branch.
+def load_public_online_adapter():
+    # Scheduled automation can still publish an adapter on prediction-history.
     return load_adapter_public()
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -270,9 +270,12 @@ st.markdown("""
 </div>
 """,unsafe_allow_html=True)
 
+history_backend=HistoryBackend(st.secrets)
 try:
     model_pkg,feature_store=load_cloud_assets()
-    online_adapter=load_online_adapter()
+    online_adapter=load_adapter_from_store(history_backend)
+    if online_adapter is None:
+        online_adapter=load_public_online_adapter()
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
@@ -283,7 +286,6 @@ if online_adapter is not None:
 else:
     st.caption("自動学習補正：base-1.12-calibrated（新規200レース以上のtrue-dateデータを蓄積中）")
 
-history_backend=HistoryBackend(st.secrets)
 entry_backend=EntryDataBackend(st.secrets)
 with st.expander("📊 保存先",expanded=False):
     st.write(f"予想履歴：**{history_backend.label}**")
@@ -592,6 +594,8 @@ with st.container(border=True):
                                 all_detail,
                                 "1.12",
                                 snapshot_type="course_batch",
+                                learning_store=history_backend,
+                                current_champion_version=champion_version(online_adapter),
                             )
                         except Exception as save_ex:
                             batch_save={
