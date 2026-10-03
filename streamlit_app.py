@@ -309,12 +309,15 @@ with st.expander("📊 保存先",expanded=False):
     st.write(f"予想履歴：**{history_backend.label}**")
     st.write(f"出走データ：**{entry_backend.label}**")
     if history_backend.persistent and entry_backend.persistent:
-        st.success("予想履歴と取得済み出走データをGitHubへ永続保存します。")
+        st.success(
+            "予想履歴・答え合わせ結果・AI学習データ・取得済み出走データを"
+            " GitHubの prediction-history ブランチへ永続保存します。"
+        )
     else:
         st.warning(
-            "GitHub永続保存が未設定の項目があります。"
-            " GITHUB_TOKEN / GITHUB_HISTORY_REPO を設定すると、"
-            "Streamlit Cloud再起動後も保存データを復元できます。"
+            "GitHub永続保存には GITHUB_TOKEN の設定が必要です。"
+            " 保存先は aquaria1192-spec/keiba-ai-cloud の prediction-history "
+            "ブランチを自動使用するため、GITHUB_HISTORY_REPO の設定は不要です。"
         )
 
 with st.container(border=True):
