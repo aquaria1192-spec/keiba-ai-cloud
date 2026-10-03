@@ -220,9 +220,6 @@ jobs:
               ), daily_ids[:10]
           # Historical provider pages are time-dependent; do not make CI
           # depend on archived third-party race cards remaining available.
-          assert "202605040104" not in set(
-              evaluation_store.unsupported_race_ids(live_date)
-          ) or True
           assert "202605040104" in set(
               __import__("auto_data_builder").unsupported_race_ids(live_date)
           )
