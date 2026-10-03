@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - fix/persist-settlement-learning
   workflow_dispatch:
     inputs:
       mode:
