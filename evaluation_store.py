@@ -320,25 +320,25 @@ def save_course_batch_predictions(
     detail,
     app_version="1.11",
     snapshot_type="course_batch",
+    learning_store=None,
+    current_champion_version="",
 ):
     """
-    Save all races produced by one venue-level batch prediction.
+    Save one immutable venue-wide prediction snapshot per race.
 
-    One race = one immutable evaluation snapshot. If a course_batch snapshot
-    for that date/course/race already exists, it is not replaced. This keeps
-    answer checking tied to the first venue-wide batch prediction rather than
-    to a later race-detail selection.
-
-    The history backend is written only once for the whole venue.
+    When learning_store is supplied, the exact pre-result feature rows used for
+    each newly saved course_batch prediction are frozen at the same time. Those
+    rows are later labelled by settle_day_snapshots after the official result is
+    known, preventing post-race feature leakage.
     """
     if detail is None or len(detail)==0:
         return {
             "saved_races":0,"existing_races":0,"saved_rows":0,
+            "learning_saved_rows":0,
             "message":"一括予想データなし",
         }
 
     d=detail.copy()
-    # Normalize source column names used by prediction_snapshot.
     if "開催日" not in d and "date" in d:
         d["開催日"]=d["date"]
     if "競馬場" not in d and "course" in d:
@@ -363,6 +363,7 @@ def save_course_batch_predictions(
             ))
 
     new=[]
+    learning_new=[]
     existing_count=0
     group_cols=["開催日","競馬場","レース"]
     for (_,_,_),g in d.groupby(group_cols,sort=False,dropna=False):
@@ -379,22 +380,61 @@ def save_course_batch_predictions(
         if len(snap):
             new.append(snap)
             existing.add(key)
+            if learning_store is not None:
+                try:
+                    from online_learning import learning_rows_from_detail
+                    learn=learning_rows_from_detail(
+                        g,snap,current_champion_version
+                    )
+                    if len(learn):
+                        learn["feature_source"]="streamlit_course_batch"
+                        learning_new.append(learn)
+                except Exception:
+                    # Prediction history is still valuable even if a learning
+                    # artifact cannot be prepared; the caller gets a warning
+                    # from the learning save step below.
+                    pass
 
     if not new:
         return {
             "saved_races":0,
             "existing_races":existing_count,
             "saved_rows":0,
+            "learning_saved_rows":0,
             "message":"一括予想はすでに答え合わせ用に保存済みです。",
         }
 
     out=pd.concat([hist]+new,ignore_index=True)
     out=out.drop_duplicates(["snapshot_id","horse_no"],keep="last")
-    backend.save(out)
+    save_info=backend.save(out) or {}
+
+    learning_saved_rows=0
+    learning_error=""
+    if learning_store is not None and learning_new:
+        try:
+            from online_learning import (
+                load_learning_rows, merge_learning_rows, save_learning_rows
+            )
+            learning_existing=load_learning_rows(learning_store)
+            learning_merged=merge_learning_rows(
+                learning_existing,*learning_new
+            )
+            save_learning_rows(
+                learning_store,
+                learning_merged,
+                f"Freeze course-batch learning features {d.iloc[0].get('開催日','')}",
+            )
+            learning_saved_rows=int(sum(len(x) for x in learning_new))
+        except Exception as e:
+            learning_error=str(e)
+
     return {
         "saved_races":len(new),
         "existing_races":existing_count,
         "saved_rows":int(sum(len(x) for x in new)),
+        "save_mode":save_info.get("mode",""),
+        "learning_saved_rows":learning_saved_rows,
+        "learning_error":learning_error,
         "message":f"一括予想 {len(new)}R を答え合わせ用に固定保存しました。",
     }
 
