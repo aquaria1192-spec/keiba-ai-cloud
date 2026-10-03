@@ -10,21 +10,21 @@ import json
 import pandas as pd
 import requests
 
+from github_storage_config import (
+    resolve_secret, resolve_token, resolve_history_repo, resolve_history_branch
+)
+
 BASE = Path(__file__).resolve().parent
 LOCAL_DIR = BASE / "data" / "saved_entries"
 JST = ZoneInfo("Asia/Tokyo")
 DEFAULT_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_HISTORY_BRANCH = "prediction-history"
+ENTRY_DATA_STORE_API_VERSION = 2
 
 
 def _secret_get(secrets, key, default=""):
-    try:
-        return secrets[key]
-    except Exception:
-        try:
-            return secrets.get(key, default)
-        except Exception:
-            return default
+    value,_=resolve_secret(secrets,key,default)
+    return value
 
 
 def _json_safe(value):
@@ -62,15 +62,9 @@ class EntryDataBackend:
     """
 
     def __init__(self, secrets=None):
-        self.token = str(_secret_get(secrets, "GITHUB_TOKEN", "") or "").strip()
-        self.repo = str(
-            _secret_get(secrets, "GITHUB_HISTORY_REPO", DEFAULT_HISTORY_REPO)
-            or DEFAULT_HISTORY_REPO
-        ).strip()
-        self.branch = str(
-            _secret_get(secrets, "GITHUB_HISTORY_BRANCH", DEFAULT_HISTORY_BRANCH)
-            or DEFAULT_HISTORY_BRANCH
-        ).strip()
+        self.token, self.token_source = resolve_token(secrets)
+        self.repo, self.repo_source = resolve_history_repo(secrets)
+        self.branch, self.branch_source = resolve_history_branch(secrets)
         self.prefix = str(
             _secret_get(secrets, "GITHUB_ENTRY_PATH_PREFIX", "saved_entries")
             or "saved_entries"
