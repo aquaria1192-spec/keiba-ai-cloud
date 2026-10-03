@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - fix/reload-evaluation-store-api
   workflow_dispatch:
     inputs:
       mode:
