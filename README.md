@@ -62,6 +62,6 @@ Ver.1.12 は確定した新規レースを学習データとして蓄積しま�
 - 条件を満たした場合だけオンライン補正モデルを昇格
 - 馬券の買い目・回収率は評価対象にせず、予測精度指標だけでモデルを比較する
 
-Streamlitで固定した学習データ・答え合わせ結果・オンライン補正モデルは、予想履歴と同じ `GITHUB_HISTORY_REPO` に永続保存します。GitHub Actionsの自動レース前予想は従来どおり `prediction-history` ブランチを使用します。アプリは自身の答え合わせから昇格した補正モデルを優先し、存在しない場合だけ公開済み自動学習モデルへフォールバックします。基準の `cloud_model.joblib` は自動上書きしません。
+Streamlitで固定した学習データ・答え合わせ結果・オンライン補正モデルは、既定で `aquaria1192-spec/keiba-ai-cloud` の `prediction-history` ブランチへ永続保存します。Streamlit Secretsでは `GITHUB_TOKEN` だけが必須で、`GITHUB_HISTORY_REPO` / `GITHUB_HISTORY_BRANCH` は保存先を変更したい場合だけ設定します。GitHub Actionsの自動レース前予想も同じ `prediction-history` ブランチを使用します。アプリは自身の答え合わせから昇格した補正モデルを優先し、存在しない場合だけ公開済み自動学習モデルへフォールバックします。基準の `cloud_model.joblib` は自動上書きしません。
 
 詳しい安全設計は `ONLINE_LEARNING.md` を参照してください。
