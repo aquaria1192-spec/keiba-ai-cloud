@@ -140,6 +140,63 @@ class HistoryBackend:
         df=pd.read_csv(StringIO(raw.decode("utf-8-sig")),low_memory=False) if raw else blank_history()
         return norm_history(df),js.get("sha")
 
+    def _local_store_path(self,path):
+        p=DATA_DIR/str(path)
+        p.parent.mkdir(parents=True,exist_ok=True)
+        return p
+
+    def read_bytes(self,path):
+        """Generic store API used by online-learning artifacts."""
+        if self.persistent:
+            url=f"https://api.github.com/repos/{self.repo}/contents/{path}"
+            r=requests.get(
+                url,headers=self.headers(),params={"ref":self.branch},timeout=20
+            )
+            if r.status_code==404:
+                return b"",None
+            r.raise_for_status()
+            js=r.json()
+            return base64.b64decode(js.get("content","")),js.get("sha")
+        p=self._local_store_path(path)
+        return (p.read_bytes(),None) if p.exists() else (b"",None)
+
+    def write_bytes(self,path,data,message):
+        """Generic persistent writer used by online-learning artifacts."""
+        p=self._local_store_path(path)
+        p.write_bytes(data)
+        if not self.persistent:
+            return {"mode":"local","path":str(p)}
+        _,sha=self.read_bytes(path)
+        payload={
+            "message":message,
+            "content":base64.b64encode(data).decode("ascii"),
+            "branch":self.branch,
+        }
+        if sha:
+            payload["sha"]=sha
+        url=f"https://api.github.com/repos/{self.repo}/contents/{path}"
+        r=requests.put(url,headers=self.headers(),json=payload,timeout=30)
+        r.raise_for_status()
+        return {"mode":"github","path":path}
+
+    def read_csv(self,path):
+        raw,_=self.read_bytes(path)
+        if not raw:
+            return pd.DataFrame()
+        return pd.read_csv(StringIO(raw.decode("utf-8-sig")),low_memory=False)
+
+    def write_csv(self,path,df,message):
+        raw=df.to_csv(index=False).encode("utf-8-sig")
+        return self.write_bytes(path,raw,message)
+
+    def read_json(self,path):
+        raw,_=self.read_bytes(path)
+        return json.loads(raw.decode("utf-8")) if raw else None
+
+    def write_json(self,path,obj,message):
+        raw=json.dumps(obj,ensure_ascii=False,indent=2).encode("utf-8")
+        return self.write_bytes(path,raw,message)
+
     def load(self):
         if self.persistent:
             try:
@@ -263,25 +320,25 @@ def save_course_batch_predictions(
     detail,
     app_version="1.11",
     snapshot_type="course_batch",
+    learning_store=None,
+    current_champion_version="",
 ):
     """
-    Save all races produced by one venue-level batch prediction.
+    Save one immutable venue-wide prediction snapshot per race.
 
-    One race = one immutable evaluation snapshot. If a course_batch snapshot
-    for that date/course/race already exists, it is not replaced. This keeps
-    answer checking tied to the first venue-wide batch prediction rather than
-    to a later race-detail selection.
-
-    The history backend is written only once for the whole venue.
+    When learning_store is supplied, the exact pre-result feature rows used for
+    each newly saved course_batch prediction are frozen at the same time. Those
+    rows are later labelled by settle_day_snapshots after the official result is
+    known, preventing post-race feature leakage.
     """
     if detail is None or len(detail)==0:
         return {
             "saved_races":0,"existing_races":0,"saved_rows":0,
+            "learning_saved_rows":0,
             "message":"一括予想データなし",
         }
 
     d=detail.copy()
-    # Normalize source column names used by prediction_snapshot.
     if "開催日" not in d and "date" in d:
         d["開催日"]=d["date"]
     if "競馬場" not in d and "course" in d:
@@ -306,6 +363,7 @@ def save_course_batch_predictions(
             ))
 
     new=[]
+    learning_new=[]
     existing_count=0
     group_cols=["開催日","競馬場","レース"]
     for (_,_,_),g in d.groupby(group_cols,sort=False,dropna=False):
@@ -322,22 +380,61 @@ def save_course_batch_predictions(
         if len(snap):
             new.append(snap)
             existing.add(key)
+            if learning_store is not None:
+                try:
+                    from online_learning import learning_rows_from_detail
+                    learn=learning_rows_from_detail(
+                        g,snap,current_champion_version
+                    )
+                    if len(learn):
+                        learn["feature_source"]="streamlit_course_batch"
+                        learning_new.append(learn)
+                except Exception:
+                    # Prediction history is still valuable even if a learning
+                    # artifact cannot be prepared; the caller gets a warning
+                    # from the learning save step below.
+                    pass
 
     if not new:
         return {
             "saved_races":0,
             "existing_races":existing_count,
             "saved_rows":0,
+            "learning_saved_rows":0,
             "message":"一括予想はすでに答え合わせ用に保存済みです。",
         }
 
     out=pd.concat([hist]+new,ignore_index=True)
     out=out.drop_duplicates(["snapshot_id","horse_no"],keep="last")
-    backend.save(out)
+    save_info=backend.save(out) or {}
+
+    learning_saved_rows=0
+    learning_error=""
+    if learning_store is not None and learning_new:
+        try:
+            from online_learning import (
+                load_learning_rows, merge_learning_rows, save_learning_rows
+            )
+            learning_existing=load_learning_rows(learning_store)
+            learning_merged=merge_learning_rows(
+                learning_existing,*learning_new
+            )
+            save_learning_rows(
+                learning_store,
+                learning_merged,
+                f"Freeze course-batch learning features {d.iloc[0].get('開催日','')}",
+            )
+            learning_saved_rows=int(sum(len(x) for x in learning_new))
+        except Exception as e:
+            learning_error=str(e)
+
     return {
         "saved_races":len(new),
         "existing_races":existing_count,
         "saved_rows":int(sum(len(x) for x in new)),
+        "save_mode":save_info.get("mode",""),
+        "learning_saved_rows":learning_saved_rows,
+        "learning_error":learning_error,
         "message":f"一括予想 {len(new)}R を答え合わせ用に固定保存しました。",
     }
 
@@ -561,16 +658,16 @@ def settle_day_snapshots(
     race_id_map=None,
     expected_races=None,
     progress_callback=None,
+    learning_store=None,
+    run_learning=True,
 ):
     """
-    Check all races for one day in one operation.
+    Check all races for one day, persist the official results, and optionally
+    attach those results to the frozen pre-race learning rows.
 
-    expected_races:
-      iterable of (course, race_no). When supplied, races with no saved
-      prediction are included in the report as "予想履歴なし".
-
-    The course_batch snapshot is evaluated first; other prediction types are fallback only.
-    The history file is saved once after the entire day is processed.
+    The course_batch snapshot is evaluated first; other prediction types are
+    fallback only. Prediction history and learning rows are each written once
+    after the whole day is processed.
     """
     hist=backend.load()
     if hist.empty and not expected_races:
@@ -578,7 +675,16 @@ def settle_day_snapshots(
 
     date_iso=str(date_iso)
 
-    # Saved races for the requested day.
+    learning=None
+    learning_changed=False
+    learning_error=""
+    if learning_store is not None:
+        try:
+            from online_learning import load_learning_rows
+            learning=load_learning_rows(learning_store)
+        except Exception as e:
+            learning_error=f"学習データ読込失敗: {e}"
+
     saved=[]
     if not hist.empty:
         q=hist[hist["date"].astype(str)==date_iso].copy()
@@ -589,7 +695,6 @@ def settle_day_snapshots(
                 .itertuples(index=False,name=None)
             )
 
-    # Union with all races in the day's entry data.
     pairs=[]
     seen=set()
     for item in list(expected_races or []) + saved:
@@ -605,13 +710,26 @@ def settle_day_snapshots(
     if not pairs:
         raise RuntimeError("この開催日の予想履歴がありません。")
 
-    # Sort by venue then numeric race number.
     pairs=sorted(pairs,key=lambda x:(x[0],_race_no_int(x[1])))
 
     rows=[]
     changed=False
+    settled_sids=[]
     total=len(pairs)
     now=datetime.now(JST).isoformat(timespec="seconds")
+
+    def _apply_learning_labels(snapshot_id,finish_map,result_url):
+        nonlocal learning,learning_changed,learning_error
+        if learning_store is None or learning is None:
+            return
+        try:
+            from online_learning import apply_learning_result
+            learning,learn_changed=apply_learning_result(
+                learning,snapshot_id,finish_map,result_url,now
+            )
+            learning_changed=learning_changed or bool(learn_changed)
+        except Exception as e:
+            learning_error=f"学習ラベル反映失敗: {e}"
 
     for i,(course,race_no) in enumerate(pairs, start=1):
         if progress_callback:
@@ -640,8 +758,20 @@ def settle_day_snapshots(
         actual=pd.to_numeric(snap["actual_finish"],errors="coerce")
         finish_done=int(actual.notna().sum()) >= 3
 
-        # Answer checking is result-only: no ticket reconstruction or payout/ROI.
         if finish_done:
+            finish_map={}
+            for _,r in snap.iterrows():
+                no=pd.to_numeric(
+                    pd.Series([r.get("horse_no")]),errors="coerce"
+                ).iloc[0]
+                fi=pd.to_numeric(
+                    pd.Series([r.get("actual_finish")]),errors="coerce"
+                ).iloc[0]
+                if pd.notna(no) and pd.notna(fi):
+                    finish_map[int(no)]=int(fi)
+            _apply_learning_labels(
+                sid,finish_map,str(snap.iloc[0].get("result_url","") or "")
+            )
             answer=_main_answer_fields(snap)
             rows.append({
                 "競馬場":course,"レース":race_no,
@@ -700,6 +830,10 @@ def settle_day_snapshots(
                 continue
 
             changed=True
+            settled_sids.append(sid)
+            _apply_learning_labels(
+                sid,finish_map,result.get("result_url","")
+            )
             answer=_main_answer_fields(hist.loc[mask])
             rows.append({
                 "競馬場":course,"レース":race_no,
@@ -717,9 +851,44 @@ def settle_day_snapshots(
                 "メッセージ":str(e),
             })
 
-    # One write for the whole day.
+    save_info={"mode":getattr(backend,"mode","")}
     if changed:
-        backend.save(hist)
+        save_info=backend.save(hist) or save_info
+
+        # Do not merely assume the write worked. Reload the persistent backend
+        # and confirm that every newly settled snapshot still has result rows.
+        verified=backend.load()
+        for sid in settled_sids:
+            q=verified[verified["snapshot_id"].astype(str)==str(sid)]
+            n=int(pd.to_numeric(q["actual_finish"],errors="coerce").notna().sum())
+            if n < 3:
+                raise RuntimeError(
+                    f"答え合わせ結果の保存確認に失敗しました: {sid}"
+                )
+
+    learning_saved=False
+    if learning_store is not None and learning is not None and learning_changed:
+        try:
+            from online_learning import save_learning_rows
+            save_learning_rows(
+                learning_store,learning,
+                f"Save answer-check learning labels {date_iso}"
+            )
+            learning_saved=True
+        except Exception as e:
+            learning_error=f"学習データ保存失敗: {e}"
+
+    learning_result={}
+    if (
+        learning_store is not None and
+        learning_saved and
+        run_learning
+    ):
+        try:
+            from online_learning import run_online_learning
+            learning_result=run_online_learning(learning_store) or {}
+        except Exception as e:
+            learning_error=f"AI強化判定失敗: {e}"
 
     report=pd.DataFrame(rows)
     counts=report["状態"].value_counts().to_dict() if len(report) else {}
@@ -744,6 +913,12 @@ def settle_day_snapshots(
         "main_win_rate":win_hits/evaluated_races if evaluated_races else np.nan,
         "main_second_rate":second_hits/evaluated_races if evaluated_races else np.nan,
         "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
+        "save_mode":save_info.get("mode",getattr(backend,"mode","")),
+        "saved_result_races":len(settled_sids),
+        "save_verified":bool(not changed or settled_sids),
+        "learning_saved":learning_saved,
+        "learning_error":learning_error,
+        "learning_result":learning_result,
         "report":report,
     }
 

@@ -23,7 +23,8 @@ from evaluation_store import (
     load_public_auto_history, merge_histories
 )
 from online_learning import (
-    load_adapter_public, apply_online_adapter, champion_version
+    load_adapter_public, load_adapter_from_store,
+    apply_online_adapter, champion_version
 )
 from entry_data_store import EntryDataBackend
 
@@ -72,9 +73,8 @@ def load_cloud_assets():
     return model, store
 
 @st.cache_resource(ttl=300)
-def load_online_adapter():
-    # The promoted adapter lives on prediction-history, so it can improve
-    # without changing/redeploying the main application branch.
+def load_public_online_adapter():
+    # Scheduled automation can still publish an adapter on prediction-history.
     return load_adapter_public()
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -270,9 +270,12 @@ st.markdown("""
 </div>
 """,unsafe_allow_html=True)
 
+history_backend=HistoryBackend(st.secrets)
 try:
     model_pkg,feature_store=load_cloud_assets()
-    online_adapter=load_online_adapter()
+    online_adapter=load_adapter_from_store(history_backend)
+    if online_adapter is None:
+        online_adapter=load_public_online_adapter()
 except Exception as e:
     st.error(f"クラウドAIの読み込みに失敗しました：{e}")
     st.stop()
@@ -283,7 +286,6 @@ if online_adapter is not None:
 else:
     st.caption("自動学習補正：base-1.12-calibrated（新規200レース以上のtrue-dateデータを蓄積中）")
 
-history_backend=HistoryBackend(st.secrets)
 entry_backend=EntryDataBackend(st.secrets)
 with st.expander("📊 保存先",expanded=False):
     st.write(f"予想履歴：**{history_backend.label}**")
@@ -592,6 +594,8 @@ with st.container(border=True):
                                 all_detail,
                                 "1.12",
                                 snapshot_type="course_batch",
+                                learning_store=history_backend,
+                                current_champion_version=champion_version(online_adapter),
                             )
                         except Exception as save_ex:
                             batch_save={
@@ -638,6 +642,16 @@ with st.container(border=True):
             elif batch_save.get("existing_races",0)>0:
                 st.caption(
                     "📝 この開催地の一括予想は、すでに答え合わせ用として固定保存済みです。"
+                )
+            if batch_save.get("learning_saved_rows",0)>0:
+                st.caption(
+                    f"🧠 AI強化用の事前特徴量も "
+                    f"{batch_save.get('learning_saved_rows',0)}頭分を同時保存しました。"
+                )
+            if batch_save.get("learning_error"):
+                st.warning(
+                    "AI強化用データの保存だけ失敗しました："
+                    + str(batch_save.get("learning_error"))
                 )
 
             st.markdown("#### 全レース一括予想")
@@ -797,6 +811,8 @@ with st.container(border=True):
                 race_id_map=info_now.get("race_id_map") or {},
                 expected_races=expected_races,
                 progress_callback=_bulk_progress,
+                learning_store=history_backend,
+                run_learning=True,
             )
             progress.progress(1.0,text="1日分の答え合わせが完了しました。")
             st.session_state["bulk_settle_result_110"]=result
@@ -807,6 +823,41 @@ with st.container(border=True):
                 f"未公開・取得失敗 {result['failed']}R／"
                 f"予想履歴なし {result['no_prediction']}R"
             )
+            if result.get("save_mode")=="github":
+                st.success(
+                    f"💾 答え合わせ結果をGitHubへ永続保存しました。"
+                    f" 新規保存 {result.get('saved_result_races',0)}R"
+                )
+            elif result.get("saved_result_races",0)>0:
+                st.warning(
+                    "答え合わせ結果はローカル保存です。"
+                    " GitHub永続保存を有効にすると再起動後も残ります。"
+                )
+
+            if result.get("learning_saved"):
+                lr=result.get("learning_result") or {}
+                total_learn=int(lr.get("total_settled_races",0) or 0)
+                min_learn=int(lr.get("min_new_races",200) or 200)
+                status=str(lr.get("status",""))
+                if status=="promoted":
+                    st.success(
+                        "🧠 答え合わせ結果をAI強化へ反映し、"
+                        f"新モデル {lr.get('promoted_version','')} を採用しました。"
+                    )
+                else:
+                    st.info(
+                        "🧠 答え合わせ結果をAI強化用データへ保存しました。"
+                        f" 現在 {total_learn}R 蓄積"
+                        + (
+                            f"（次回モデル評価の基準 {min_learn}R）"
+                            if min_learn else ""
+                        )
+                    )
+            if result.get("learning_error"):
+                st.warning(
+                    "答え合わせ結果は保存済みですが、AI強化処理に補足があります："
+                    + str(result.get("learning_error"))
+                )
             evaluated=result.get("evaluated_races",0)
             if evaluated:
                 st.write(

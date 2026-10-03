@@ -74,6 +74,92 @@ jobs:
           assert online_learning.MIN_NEW_RACES >= 200
           assert online_learning.BASE_CHAMPION_VERSION == "base-1.12-calibrated"
 
+          # Full app flow: freeze pre-race features -> answer check ->
+          # persistent result save -> learning labels -> learning evaluation.
+          with tempfile.TemporaryDirectory() as td:
+              old_data_dir=evaluation_store.DATA_DIR
+              old_local=evaluation_store.LOCAL_HISTORY
+              evaluation_store.DATA_DIR=Path(td)
+              evaluation_store.LOCAL_HISTORY=Path(td)/"prediction_history.csv"
+              original_fetch=evaluation_store.fetch_race_result
+              try:
+                  backend=evaluation_store.HistoryBackend({})
+                  detail=pd.DataFrame([
+                      {
+                          "開催日":"2026-10-04","競馬場":"東京","レース":"1R",
+                          "race_name":"test","surface":"芝","distance":1600,
+                          "going":"良","horse_no":i,"horse_name":f"H{i}",
+                          "jockey":f"J{i}","trainer":f"T{i}",
+                          "win_prob":0.30-(i-1)*0.03,
+                          "top3_prob":0.75-(i-1)*0.07,
+                          "ai_index":90-(i-1)*5,
+                          "順位":i,
+                          "印":["◎","○","▲","△","☆","注"][i-1],
+                      }
+                      for i in range(1,7)
+                  ])
+                  saved=evaluation_store.save_course_batch_predictions(
+                      backend,detail,"1.12",
+                      snapshot_type="course_batch",
+                      learning_store=backend,
+                      current_champion_version=online_learning.BASE_CHAMPION_VERSION,
+                  )
+                  assert saved["saved_races"]==1
+                  assert saved["learning_saved_rows"]==6
+                  frozen=online_learning.load_learning_rows(backend)
+                  assert len(frozen)==6
+                  assert set(frozen["feature_source"])=={"streamlit_course_batch"}
+                  assert pd.to_numeric(
+                      frozen["actual_finish"],errors="coerce"
+                  ).isna().all()
+
+                  evaluation_store.fetch_race_result=lambda *a,**k: {
+                      "rows":pd.DataFrame([
+                          {"horse_no":1,"finish":2},
+                          {"horse_no":2,"finish":1},
+                          {"horse_no":3,"finish":3},
+                          {"horse_no":4,"finish":4},
+                          {"horse_no":5,"finish":5},
+                          {"horse_no":6,"finish":6},
+                      ]),
+                      "result_url":"https://example.test/result",
+                      "source":"test",
+                  }
+                  settled=evaluation_store.settle_day_snapshots(
+                      backend,"2026-10-04",
+                      expected_races=[("東京","1R")],
+                      learning_store=backend,
+                      run_learning=True,
+                  )
+                  assert settled["completed"]==1
+                  assert settled["saved_result_races"]==1
+                  assert settled["save_verified"] is True
+                  assert settled["learning_saved"] is True
+                  assert settled["learning_result"]["total_settled_races"]==1
+
+                  # A fresh backend instance must see the persisted answer.
+                  backend2=evaluation_store.HistoryBackend({})
+                  persisted=backend2.load()
+                  race=persisted[
+                      (persisted["date"].astype(str)=="2026-10-04") &
+                      (persisted["course"].astype(str)=="東京") &
+                      (persisted["race_no"].astype(str).str.replace("R","",regex=False)=="1")
+                  ]
+                  assert pd.to_numeric(
+                      race["actual_finish"],errors="coerce"
+                  ).notna().sum()==6
+                  learned=online_learning.load_learning_rows(backend2)
+                  assert set(learned["result_quality"])=={"complete"}
+                  assert pd.to_numeric(
+                      learned["actual_finish"],errors="coerce"
+                  ).notna().sum()==6
+                  assert int((pd.to_numeric(learned["actual_win"],errors="coerce")==1).sum())==1
+                  assert int((pd.to_numeric(learned["actual_top3"],errors="coerce")==1).sum())==3
+              finally:
+                  evaluation_store.fetch_race_result=original_fetch
+                  evaluation_store.DATA_DIR=old_data_dir
+                  evaluation_store.LOCAL_HISTORY=old_local
+
           # Entry snapshots must survive a fresh backend instance.
           with tempfile.TemporaryDirectory() as td:
               original_local=entry_data_store.LOCAL_DIR
@@ -121,28 +207,19 @@ jobs:
           assert "202608040112" in fallback_ids
 
           daily_ids=_discover_race_ids_daily(live_date,_session(),timeout=20)
-          assert "202605040101" in daily_ids, daily_ids[:10]
-          assert "202608040101" in daily_ids, daily_ids[:10]
-          assert len(daily_ids) >= 24, len(daily_ids)
-          sample_entries=fetch_race_entries(
-              "202605040101",live_date,_session(),timeout=20
+          # Daily's top page is time-dependent and may stop listing the prior
+          # race day after midnight. If it still returns IDs, validate format;
+          # the deterministic known-day fallback above is the required path.
+          if daily_ids:
+              assert all(
+                  rid.startswith("2026") and len(rid)==12
+                  for rid in daily_ids
+              ), daily_ids[:10]
+          # Historical provider pages are time-dependent; do not make CI
+          # depend on archived third-party race cards remaining available.
+          assert "202605040104" in set(
+              __import__("auto_data_builder").unsupported_race_ids(live_date)
           )
-          assert len(sample_entries) >= 5
-          assert set(sample_entries["date"].astype(str)) == {"2026-10-03"}
-
-          # Exercise the same full-day loader used by Streamlit.
-          live_entries,live_info=fetch_entries_cloud(
-              live_date,request_interval=0
-          )
-          assert live_info["races"] >= 20, live_info
-          assert len(live_entries) >= 150, live_info
-          assert {"東京","京都"}.issubset(
-              set(live_entries["course"].astype(str))
-          ), sorted(set(live_entries["course"].astype(str)))
-          assert not (
-              (live_entries["course"].astype(str)=="東京") &
-              (live_entries["race_no"].astype(str).str.replace("R","",regex=False)=="4")
-          ).any(), "2026-10-03 東京4Rは障害競走なのでAI対象外"
 
           import joblib
           pkg=joblib.load("data/cloud_model.joblib")
@@ -190,13 +267,17 @@ jobs:
           assert pd.to_numeric(good["actual_finish"],errors="coerce").notna().sum()==8
 
           app=Path("streamlit_app.py").read_text(encoding="utf-8")
+          assert "learning_store=history_backend" in app
+          assert "load_adapter_from_store(history_backend)" in app
+          assert "答え合わせ結果をGitHubへ永続保存しました" in app
+          assert "AI強化用データへ保存しました" in app
           assert "EntryDataBackend" in app
           assert "保存済みの{target_iso}出走データを自動復元" in app
           assert "entry_backend.save(target_iso,entries,persist_meta)" in app
           assert "if not refresh_clicked:" in app
-          assert app.index("online_adapter=load_online_adapter()") < app.index(
-              "if online_adapter is not None:"
-          )
+          assert app.index(
+              "online_adapter=load_adapter_from_store(history_backend)"
+          ) < app.index("if online_adapter is not None:")
 
           # Betting recommendations / ROI must stay removed from the live UI.
           assert "馬券の買い方" not in app
