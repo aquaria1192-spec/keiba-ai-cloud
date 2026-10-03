@@ -13,6 +13,9 @@ import numpy as np
 import pandas as pd
 import requests
 
+from github_storage_config import (
+    resolve_secret, resolve_token, resolve_history_repo, resolve_history_branch
+)
 from auto_data_builder import _session, VENUE_CODE, _flatten_columns, _find_col
 from race_day_context import (
     _result_url_from_entry, parse_jra_result_html,
@@ -22,7 +25,7 @@ BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
-EVALUATION_STORE_API_VERSION = 3
+EVALUATION_STORE_API_VERSION = 4
 
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
@@ -96,13 +99,8 @@ def norm_history(df):
     return out[COLS]
 
 def secret_get(secrets,key,default=""):
-    try:
-        return secrets[key]
-    except Exception:
-        try:
-            return secrets.get(key,default)
-        except Exception:
-            return default
+    value,_=resolve_secret(secrets,key,default)
+    return value
 
 class HistoryBackend:
     """
@@ -111,15 +109,9 @@ class HistoryBackend:
     allowing the app and automation to share the same persistent store.
     """
     def __init__(self,secrets=None):
-        self.token=str(secret_get(secrets,"GITHUB_TOKEN","") or "").strip()
-        self.repo=str(
-            secret_get(secrets,"GITHUB_HISTORY_REPO",DEFAULT_HISTORY_REPO)
-            or DEFAULT_HISTORY_REPO
-        ).strip()
-        self.branch=str(
-            secret_get(secrets,"GITHUB_HISTORY_BRANCH",DEFAULT_HISTORY_BRANCH)
-            or DEFAULT_HISTORY_BRANCH
-        ).strip()
+        self.token,self.token_source=resolve_token(secrets)
+        self.repo,self.repo_source=resolve_history_repo(secrets)
+        self.branch,self.branch_source=resolve_history_branch(secrets)
         self.path=str(secret_get(secrets,"GITHUB_HISTORY_PATH","prediction_history.csv") or "prediction_history.csv").strip()
         self.mode="github" if self.token and self.repo else "local"
 
