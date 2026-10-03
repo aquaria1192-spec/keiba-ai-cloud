@@ -140,6 +140,63 @@ class HistoryBackend:
         df=pd.read_csv(StringIO(raw.decode("utf-8-sig")),low_memory=False) if raw else blank_history()
         return norm_history(df),js.get("sha")
 
+    def _local_store_path(self,path):
+        p=DATA_DIR/str(path)
+        p.parent.mkdir(parents=True,exist_ok=True)
+        return p
+
+    def read_bytes(self,path):
+        """Generic store API used by online-learning artifacts."""
+        if self.persistent:
+            url=f"https://api.github.com/repos/{self.repo}/contents/{path}"
+            r=requests.get(
+                url,headers=self.headers(),params={"ref":self.branch},timeout=20
+            )
+            if r.status_code==404:
+                return b"",None
+            r.raise_for_status()
+            js=r.json()
+            return base64.b64decode(js.get("content","")),js.get("sha")
+        p=self._local_store_path(path)
+        return (p.read_bytes(),None) if p.exists() else (b"",None)
+
+    def write_bytes(self,path,data,message):
+        """Generic persistent writer used by online-learning artifacts."""
+        p=self._local_store_path(path)
+        p.write_bytes(data)
+        if not self.persistent:
+            return {"mode":"local","path":str(p)}
+        _,sha=self.read_bytes(path)
+        payload={
+            "message":message,
+            "content":base64.b64encode(data).decode("ascii"),
+            "branch":self.branch,
+        }
+        if sha:
+            payload["sha"]=sha
+        url=f"https://api.github.com/repos/{self.repo}/contents/{path}"
+        r=requests.put(url,headers=self.headers(),json=payload,timeout=30)
+        r.raise_for_status()
+        return {"mode":"github","path":path}
+
+    def read_csv(self,path):
+        raw,_=self.read_bytes(path)
+        if not raw:
+            return pd.DataFrame()
+        return pd.read_csv(StringIO(raw.decode("utf-8-sig")),low_memory=False)
+
+    def write_csv(self,path,df,message):
+        raw=df.to_csv(index=False).encode("utf-8-sig")
+        return self.write_bytes(path,raw,message)
+
+    def read_json(self,path):
+        raw,_=self.read_bytes(path)
+        return json.loads(raw.decode("utf-8")) if raw else None
+
+    def write_json(self,path,obj,message):
+        raw=json.dumps(obj,ensure_ascii=False,indent=2).encode("utf-8")
+        return self.write_bytes(path,raw,message)
+
     def load(self):
         if self.persistent:
             try:
