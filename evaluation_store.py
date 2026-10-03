@@ -27,6 +27,8 @@ EVALUATION_STORE_API_VERSION = 3
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
 DEFAULT_AUTO_HISTORY_PATH = "automation_data/pre_race_predictions.csv"
+DEFAULT_HISTORY_REPO = DEFAULT_AUTO_HISTORY_REPO
+DEFAULT_HISTORY_BRANCH = DEFAULT_AUTO_HISTORY_BRANCH
 
 def load_public_auto_history(
     repo=DEFAULT_AUTO_HISTORY_REPO,
@@ -104,14 +106,20 @@ def secret_get(secrets,key,default=""):
 
 class HistoryBackend:
     """
-    Persistent mode writes to a separate GitHub history repository.
-    This deliberately avoids writing to the Streamlit app repository because
-    doing so can trigger a redeploy every time a prediction is recorded.
+    Persistent mode writes to the dedicated prediction-history branch by
+    default. Keeping runtime data off main avoids Streamlit redeploys while
+    allowing the app and automation to share the same persistent store.
     """
     def __init__(self,secrets=None):
         self.token=str(secret_get(secrets,"GITHUB_TOKEN","") or "").strip()
-        self.repo=str(secret_get(secrets,"GITHUB_HISTORY_REPO","") or "").strip()
-        self.branch=str(secret_get(secrets,"GITHUB_HISTORY_BRANCH","main") or "main").strip()
+        self.repo=str(
+            secret_get(secrets,"GITHUB_HISTORY_REPO",DEFAULT_HISTORY_REPO)
+            or DEFAULT_HISTORY_REPO
+        ).strip()
+        self.branch=str(
+            secret_get(secrets,"GITHUB_HISTORY_BRANCH",DEFAULT_HISTORY_BRANCH)
+            or DEFAULT_HISTORY_BRANCH
+        ).strip()
         self.path=str(secret_get(secrets,"GITHUB_HISTORY_PATH","prediction_history.csv") or "prediction_history.csv").strip()
         self.mode="github" if self.token and self.repo else "local"
 

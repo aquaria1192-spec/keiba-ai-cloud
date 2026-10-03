@@ -13,6 +13,8 @@ import requests
 BASE = Path(__file__).resolve().parent
 LOCAL_DIR = BASE / "data" / "saved_entries"
 JST = ZoneInfo("Asia/Tokyo")
+DEFAULT_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
+DEFAULT_HISTORY_BRANCH = "prediction-history"
 
 
 def _secret_get(secrets, key, default=""):
@@ -61,9 +63,13 @@ class EntryDataBackend:
 
     def __init__(self, secrets=None):
         self.token = str(_secret_get(secrets, "GITHUB_TOKEN", "") or "").strip()
-        self.repo = str(_secret_get(secrets, "GITHUB_HISTORY_REPO", "") or "").strip()
+        self.repo = str(
+            _secret_get(secrets, "GITHUB_HISTORY_REPO", DEFAULT_HISTORY_REPO)
+            or DEFAULT_HISTORY_REPO
+        ).strip()
         self.branch = str(
-            _secret_get(secrets, "GITHUB_HISTORY_BRANCH", "main") or "main"
+            _secret_get(secrets, "GITHUB_HISTORY_BRANCH", DEFAULT_HISTORY_BRANCH)
+            or DEFAULT_HISTORY_BRANCH
         ).strip()
         self.prefix = str(
             _secret_get(secrets, "GITHUB_ENTRY_PATH_PREFIX", "saved_entries")
