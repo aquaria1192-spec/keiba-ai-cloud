@@ -23,7 +23,7 @@ from race_day_context import (
 # signature. Version-check + reload prevents mixed-version calls such as
 # "unexpected keyword argument 'learning_store'".
 import evaluation_store as _evaluation_store
-if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 3:
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 4:
     _evaluation_store = importlib.reload(_evaluation_store)
 
 HistoryBackend = _evaluation_store.HistoryBackend
@@ -41,7 +41,11 @@ from online_learning import (
     load_adapter_public, load_adapter_from_store,
     apply_online_adapter, champion_version
 )
-from entry_data_store import EntryDataBackend
+import entry_data_store as _entry_data_store
+if getattr(_entry_data_store, "ENTRY_DATA_STORE_API_VERSION", 0) < 2:
+    _entry_data_store = importlib.reload(_entry_data_store)
+EntryDataBackend = _entry_data_store.EntryDataBackend
+from github_storage_config import diagnose_github_storage
 
 BASE = Path(__file__).resolve().parent
 MODEL_FILE = BASE/"data"/"cloud_model.joblib"
@@ -308,6 +312,13 @@ entry_backend=EntryDataBackend(st.secrets)
 with st.expander("📊 保存先",expanded=False):
     st.write(f"予想履歴：**{history_backend.label}**")
     st.write(f"出走データ：**{entry_backend.label}**")
+    token_source=str(getattr(history_backend,"token_source","default"))
+    token_detected=bool(getattr(history_backend,"token",""))
+    st.caption(
+        "GitHub認証："
+        + ("トークンを認識済み" if token_detected else "トークン未認識")
+        + f" ／ 読み取り元：{token_source}"
+    )
     if history_backend.persistent and entry_backend.persistent:
         st.success(
             "予想履歴・答え合わせ結果・AI学習データ・取得済み出走データを"
@@ -315,10 +326,42 @@ with st.expander("📊 保存先",expanded=False):
         )
     else:
         st.warning(
-            "GitHub永続保存には GITHUB_TOKEN の設定が必要です。"
-            " 保存先は aquaria1192-spec/keiba-ai-cloud の prediction-history "
-            "ブランチを自動使用するため、GITHUB_HISTORY_REPO の設定は不要です。"
+            "GitHub永続保存用トークンをアプリから認識できていません。"
+            " GITHUB_TOKEN = \"github_pat_...\" のトップレベル形式のほか、"
+            " [github] token = \"...\" や環境変数 GITHUB_TOKEN / GH_TOKEN "
+            "にも対応しています。"
         )
+
+    if st.button("GitHub保存を診断",use_container_width=True,key="github_storage_diag"):
+        diag=diagnose_github_storage(
+            getattr(history_backend,"token",""),
+            getattr(history_backend,"repo","aquaria1192-spec/keiba-ai-cloud"),
+            getattr(history_backend,"branch","prediction-history"),
+        )
+        if diag.get("status")=="ok":
+            st.success("✅ "+str(diag.get("detail","GitHub接続に成功しました。")))
+            if diag.get("login"):
+                st.caption(f"認証ユーザー：{diag['login']}")
+            perm=diag.get("write_permission","unknown")
+            if perm=="ok":
+                st.success("書込権限：GitHub上で確認できました。")
+            elif perm=="unknown":
+                st.info(
+                    "書込権限はAPI応答だけでは判定できませんでした。"
+                    " 実際の保存時に最終確認します。"
+                )
+        elif diag.get("status")=="token_missing":
+            st.error(
+                "❌ GITHUB_TOKENをアプリが認識できていません。"
+                " Streamlit Cloudの対象アプリのSecretsへ設定後、Reboot appしてください。"
+            )
+        else:
+            st.error("❌ "+str(diag.get("detail","GitHub接続診断に失敗しました。")))
+            if diag.get("status")=="write_denied":
+                st.info(
+                    "Fine-grained tokenのRepository permissionsで"
+                    " ContentsをRead and writeにしてください。"
+                )
 
 with st.container(border=True):
     st.markdown('<div class="step">① 当日データを取得・更新</div>',unsafe_allow_html=True)
