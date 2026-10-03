@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import importlib
 import joblib
 import pandas as pd
 import numpy as np
@@ -15,13 +16,27 @@ from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
 )
-from evaluation_store import (
-    HistoryBackend, save_prediction_if_new, save_course_batch_predictions,
-    settle_day_snapshots,
-    evaluation_metrics, mark_summary, condition_summary,
-    calibration_summary, training_candidate_csv,
-    load_public_auto_history, merge_histories
-)
+
+# Streamlit can keep imported modules alive across a hot redeploy. If
+# streamlit_app.py updates before the worker process is restarted, an older
+# evaluation_store may remain in sys.modules and expose the old function
+# signature. Version-check + reload prevents mixed-version calls such as
+# "unexpected keyword argument 'learning_store'".
+import evaluation_store as _evaluation_store
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 3:
+    _evaluation_store = importlib.reload(_evaluation_store)
+
+HistoryBackend = _evaluation_store.HistoryBackend
+save_prediction_if_new = _evaluation_store.save_prediction_if_new
+save_course_batch_predictions = _evaluation_store.save_course_batch_predictions
+settle_day_snapshots = _evaluation_store.settle_day_snapshots
+evaluation_metrics = _evaluation_store.evaluation_metrics
+mark_summary = _evaluation_store.mark_summary
+condition_summary = _evaluation_store.condition_summary
+calibration_summary = _evaluation_store.calibration_summary
+training_candidate_csv = _evaluation_store.training_candidate_csv
+load_public_auto_history = _evaluation_store.load_public_auto_history
+merge_histories = _evaluation_store.merge_histories
 from online_learning import (
     load_adapter_public, load_adapter_from_store,
     apply_online_adapter, champion_version
@@ -281,6 +296,9 @@ except Exception as e:
     st.stop()
 
 st.caption("確率校正：2024 proxy-yearで固定・2025 proxy-yearホールドアウトで再検証済み")
+st.caption(
+    f"保存API：evaluation-store v{getattr(_evaluation_store, 'EVALUATION_STORE_API_VERSION', 0)}"
+)
 if online_adapter is not None:
     st.caption(f"自動学習補正：**{champion_version(online_adapter)}**")
 else:
