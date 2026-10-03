@@ -25,6 +25,7 @@ from evaluation_store import (
 from online_learning import (
     load_adapter_public, apply_online_adapter, champion_version
 )
+from entry_data_store import EntryDataBackend
 
 BASE = Path(__file__).resolve().parent
 MODEL_FILE = BASE/"data"/"cloud_model.joblib"
@@ -237,6 +238,24 @@ def default_race_date():
         return now.date() if now.hour<16 else now.date()+timedelta(days=6)
     return now.date()+timedelta(days=(5-now.weekday())%7)
 
+def put_entry_state(entries, info, feature_store, contexts=None):
+    entries=entries.copy()
+    info=dict(info or {})
+    info.setdefault("date",str(entries["date"].astype(str).iloc[0]) if len(entries) else "")
+    info.setdefault("races",int(entries[["course","race_no"]].drop_duplicates().shape[0]) if len(entries) else 0)
+    info.setdefault("rows",int(len(entries)))
+    info["body_weight_count"]=int(pd.to_numeric(entries.get("body_weight"),errors="coerce").notna().sum()) if "body_weight" in entries else 0
+    info["odds_count"]=int(pd.to_numeric(entries.get("odds"),errors="coerce").notna().sum()) if "odds" in entries else 0
+    features=enrich_entries_cloud(entries,feature_store)
+
+    st.session_state["cloud_entries"]=entries
+    st.session_state["cloud_features"]=features
+    st.session_state["cloud_info"]=info
+    st.session_state["cloud_contexts"]=dict(contexts or {})
+    st.session_state["cloud_course_prediction_cache"]={}
+    st.session_state.pop("_saved_fp_112",None)
+    return features,info
+
 st.title("🏇 競馬予想AI Cloud Ver.1.12")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・単勝/3着内的中率集計")
@@ -265,19 +284,46 @@ else:
     st.caption("自動学習補正：base-1.12-calibrated（新規200レース以上のtrue-dateデータを蓄積中）")
 
 history_backend=HistoryBackend(st.secrets)
-with st.expander("📊 予想履歴の保存先",expanded=False):
-    st.write(f"現在：**{history_backend.label}**")
-    if history_backend.persistent:
-        st.success("履歴専用GitHubリポジトリへ永続保存します。")
+entry_backend=EntryDataBackend(st.secrets)
+with st.expander("📊 保存先",expanded=False):
+    st.write(f"予想履歴：**{history_backend.label}**")
+    st.write(f"出走データ：**{entry_backend.label}**")
+    if history_backend.persistent and entry_backend.persistent:
+        st.success("予想履歴と取得済み出走データをGitHubへ永続保存します。")
     else:
         st.warning(
-            "現在は一時保存です。Streamlit Cloud再起動で履歴が消える場合があります。"
-            " 下のダッシュボードから履歴CSVを定期的にダウンロードしてください。"
+            "GitHub永続保存が未設定の項目があります。"
+            " GITHUB_TOKEN / GITHUB_HISTORY_REPO を設定すると、"
+            "Streamlit Cloud再起動後も保存データを復元できます。"
         )
 
 with st.container(border=True):
     st.markdown('<div class="step">① 当日データを取得・更新</div>',unsafe_allow_html=True)
     target_date=st.date_input("予想する開催日",value=default_race_date(),key="cloud_target_date")
+    target_iso=target_date.isoformat()
+
+    # App restart / date change: restore the last successful snapshot first.
+    if st.session_state.get("_entry_restore_checked_date") != target_iso:
+        st.session_state["_entry_restore_checked_date"]=target_iso
+        current_date=str((st.session_state.get("cloud_info") or {}).get("date",""))
+        if current_date != target_iso:
+            for key in ["cloud_entries","cloud_features","cloud_info","cloud_contexts"]:
+                st.session_state.pop(key,None)
+            try:
+                saved_entries,saved_meta,saved_src=entry_backend.load(target_iso)
+                if len(saved_entries):
+                    saved_contexts=saved_meta.pop("_saved_contexts",{}) if isinstance(saved_meta,dict) else {}
+                    _,saved_info=put_entry_state(
+                        saved_entries,saved_meta,feature_store,saved_contexts
+                    )
+                    st.session_state["_entry_restored_from"]=saved_src
+                    st.success(
+                        f"💾 保存済みの{target_iso}出走データを自動復元しました。"
+                        f" {saved_info['races']}レース・{saved_info['rows']}頭"
+                    )
+            except Exception as restore_ex:
+                st.session_state["_entry_restore_error"]=str(restore_ex)
+
     c1,c2=st.columns(2)
     with c1:
         get_clicked=st.button("出走データを取得",type="primary",use_container_width=True)
@@ -292,44 +338,73 @@ with st.container(border=True):
 
     if get_clicked:
         try:
-            with st.spinner("出走表・馬場・天気を取得しています…"):
-                entries,info=fetch_entries_cached(target_date.isoformat())
-                courses=tuple(sorted(entries["course"].dropna().astype(str).unique()))
-                official_items=tuple(sorted((info.get("official_entry_urls") or {}).items()))
-                rsp=(
-                    entries[["course","race_no","surface"]]
-                    .drop_duplicates()
-                    .copy()
+            # Normal "取得" reuses a saved snapshot when available.
+            # "最新データに更新" explicitly forces a live network refresh.
+            saved_entries=pd.DataFrame()
+            saved_meta={}
+            saved_src={}
+            if not refresh_clicked:
+                saved_entries,saved_meta,saved_src=entry_backend.load(target_iso)
+
+            if len(saved_entries) and not refresh_clicked:
+                saved_contexts=saved_meta.pop("_saved_contexts",{}) if isinstance(saved_meta,dict) else {}
+                _,info=put_entry_state(
+                    saved_entries,saved_meta,feature_store,saved_contexts
                 )
-                race_surface_pairs=tuple(
-                    (
-                        str(r["course"]),
-                        race_num(r["race_no"]),
-                        str(r["surface"])
+                st.success(
+                    f"💾 保存済みデータを読み込みました。"
+                    f" {info['races']}レース・{info['rows']}頭"
+                )
+                st.caption("最新の出走情報へ更新する場合は「最新データに更新」を押してください。")
+            else:
+                with st.spinner("出走表・馬場・天気を取得しています…"):
+                    entries,info=fetch_entries_cached(target_iso)
+                    courses=tuple(sorted(entries["course"].dropna().astype(str).unique()))
+                    official_items=tuple(sorted((info.get("official_entry_urls") or {}).items()))
+                    rsp=(
+                        entries[["course","race_no","surface"]]
+                        .drop_duplicates()
+                        .copy()
                     )
-                    for _,r in rsp.iterrows()
-                    if race_num(r["race_no"]) != 999
+                    race_surface_pairs=tuple(
+                        (
+                            str(r["course"]),
+                            race_num(r["race_no"]),
+                            str(r["surface"])
+                        )
+                        for _,r in rsp.iterrows()
+                        if race_num(r["race_no"]) != 999
+                    )
+                    contexts=fetch_context_cached(
+                        target_iso,courses,official_items,race_surface_pairs
+                    )
+                    contexts=merge_entry_conditions(contexts,entries)
+                    entries,going_changed=apply_official_going(entries,contexts,target_date)
+
+                info["going_changed_rows"]=going_changed
+                info["body_weight_count"]=int(pd.to_numeric(entries["body_weight"],errors="coerce").notna().sum())
+                info["odds_count"]=int(pd.to_numeric(entries["odds"],errors="coerce").notna().sum())
+
+                save_note=""
+                try:
+                    persist_meta=dict(info)
+                    persist_meta["_saved_contexts"]=contexts
+                    saved=entry_backend.save(target_iso,entries,persist_meta)
+                    info["entry_saved_at"]=saved.get("saved_at","")
+                    info["entry_saved_mode"]=saved.get("mode","")
+                    save_note=(
+                        " GitHubへ永続保存しました。"
+                        if saved.get("mode")=="github"
+                        else " ローカルへ保存しました。"
+                    )
+                except Exception as save_ex:
+                    save_note=f" ただし保存に失敗しました：{save_ex}"
+
+                _,info=put_entry_state(entries,info,feature_store,contexts)
+                st.success(
+                    f"{info['races']}レース・{info['rows']}頭を取得しました。"
+                    + save_note
                 )
-                contexts=fetch_context_cached(
-                    target_date.isoformat(),courses,official_items,race_surface_pairs
-                )
-                contexts=merge_entry_conditions(contexts,entries)
-                entries,going_changed=apply_official_going(entries,contexts,target_date)
-                features=enrich_entries_cloud(entries,feature_store)
-
-            info["going_changed_rows"]=going_changed
-            info["body_weight_count"]=int(pd.to_numeric(entries["body_weight"],errors="coerce").notna().sum())
-            info["odds_count"]=int(pd.to_numeric(entries["odds"],errors="coerce").notna().sum())
-            st.session_state["cloud_entries"]=entries
-            st.session_state["cloud_features"]=features
-            st.session_state["cloud_info"]=info
-            st.session_state["cloud_contexts"]=contexts
-
-            # 当日データを取り直したら、開催地一括予想も必ず作り直す。
-            st.session_state["cloud_course_prediction_cache"]={}
-            st.session_state.pop("_saved_fp_112",None)
-
-            st.success(f"{info['races']}レース・{info['rows']}頭を取得しました。")
         except Exception as e:
             st.error(f"当日データを取得できませんでした：{e}")
 

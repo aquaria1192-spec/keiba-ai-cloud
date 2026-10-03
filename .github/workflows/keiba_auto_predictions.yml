@@ -50,7 +50,7 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py entry_data_store.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -65,12 +65,44 @@ jobs:
           import automation_runner
           import online_learning
           import evaluation_store
+          import entry_data_store
+          import tempfile
 
           assert _race_no_int_safe("1R") == 1
           assert _race_no_int_safe("01R") == 1
           assert _race_no_int_safe(1) == 1
           assert online_learning.MIN_NEW_RACES >= 200
           assert online_learning.BASE_CHAMPION_VERSION == "base-1.12-calibrated"
+
+          # Entry snapshots must survive a fresh backend instance.
+          with tempfile.TemporaryDirectory() as td:
+              original_local=entry_data_store.LOCAL_DIR
+              entry_data_store.LOCAL_DIR=Path(td)
+              try:
+                  sample_entries=pd.DataFrame([
+                      {"date":"2026-10-03","course":"東京","race_no":"1R","horse_no":1,"horse_name":"A","body_weight":480,"odds":3.2},
+                      {"date":"2026-10-03","course":"東京","race_no":"1R","horse_no":2,"horse_name":"B","body_weight":470,"odds":5.1},
+                  ])
+                  eb=entry_data_store.EntryDataBackend({})
+                  saved=eb.save(
+                      "2026-10-03",
+                      sample_entries,
+                      {
+                          "date":"2026-10-03",
+                          "races":1,
+                          "rows":2,
+                          "_saved_contexts":{"東京":{"turf_going":"良"}},
+                      },
+                  )
+                  assert saved["mode"]=="local"
+                  eb2=entry_data_store.EntryDataBackend({})
+                  restored,meta,src=eb2.load("2026-10-03")
+                  assert len(restored)==2
+                  assert meta["date"]=="2026-10-03"
+                  assert meta["_saved_contexts"]["東京"]["turf_going"]=="良"
+                  assert src["mode"]=="local"
+              finally:
+                  entry_data_store.LOCAL_DIR=original_local
 
           # Live discovery regression: 2026-10-03 must be discoverable even
           # when the primary race-list source does not expose static race_id links.
@@ -158,6 +190,10 @@ jobs:
           assert pd.to_numeric(good["actual_finish"],errors="coerce").notna().sum()==8
 
           app=Path("streamlit_app.py").read_text(encoding="utf-8")
+          assert "EntryDataBackend" in app
+          assert "保存済みの{target_iso}出走データを自動復元" in app
+          assert "entry_backend.save(target_iso,entries,persist_meta)" in app
+          assert "if not refresh_clicked:" in app
           assert app.index("online_adapter=load_online_adapter()") < app.index(
               "if online_adapter is not None:"
           )
