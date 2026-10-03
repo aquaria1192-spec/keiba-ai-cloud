@@ -1,6 +1,9 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
+  push:
+    branches:
+      - fix/github-token-diagnostics
   workflow_dispatch:
     inputs:
       mode:
@@ -69,10 +72,29 @@ jobs:
           import tempfile
           import inspect
           import importlib
+          import os
+          import github_storage_config
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 3
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 4
+          assert entry_data_store.ENTRY_DATA_STORE_API_VERSION >= 2
+
+          # GitHub token resolver accepts direct, nested and environment layouts.
+          token,source=github_storage_config.resolve_token({"GITHUB_TOKEN":"direct-token"})
+          assert token=="direct-token" and source=="secrets.GITHUB_TOKEN"
+          token,source=github_storage_config.resolve_token({"github":{"token":"nested-token"}})
+          assert token=="nested-token" and source=="secrets.github.token"
+          old_env=os.environ.get("GITHUB_TOKEN")
+          try:
+              os.environ["GITHUB_TOKEN"]="env-token"
+              token,source=github_storage_config.resolve_token({})
+              assert token=="env-token" and source=="env.GITHUB_TOKEN"
+          finally:
+              if old_env is None:
+                  os.environ.pop("GITHUB_TOKEN",None)
+              else:
+                  os.environ["GITHUB_TOKEN"]=old_env
           hb=evaluation_store.HistoryBackend({})
           eb=entry_data_store.EntryDataBackend({})
           assert hb.repo=="aquaria1192-spec/keiba-ai-cloud"
@@ -295,7 +317,10 @@ jobs:
           app=Path("streamlit_app.py").read_text(encoding="utf-8")
           assert "GITHUB_TOKEN の設定が必要" in app
           assert "GITHUB_HISTORY_REPO の設定は不要" in app
-          assert 'EVALUATION_STORE_API_VERSION", 0) < 3' in app
+          assert 'EVALUATION_STORE_API_VERSION", 0) < 4' in app
+          assert 'ENTRY_DATA_STORE_API_VERSION", 0) < 2' in app
+          assert "GitHub保存を診断" in app
+          assert "token_source" in app
           assert "importlib.reload(_evaluation_store)" in app
           assert "learning_store=history_backend" in app
           assert "load_adapter_from_store(history_backend)" in app
