@@ -357,6 +357,12 @@ with st.expander("📊 保存先",expanded=False):
             )
         else:
             st.error("❌ "+str(diag.get("detail","GitHub接続診断に失敗しました。")))
+            if diag.get("status")=="invalid_token_format":
+                st.info(
+                    "Streamlit Cloud → Manage app → Settings → Secrets で、"
+                    " GITHUB_TOKEN の右側を実際にGitHubで発行されたトークンへ"
+                    "置き換え、Reboot appしてください。"
+                )
             if diag.get("status")=="write_denied":
                 st.info(
                     "Fine-grained tokenのRepository permissionsで"
