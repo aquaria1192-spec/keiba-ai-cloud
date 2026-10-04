@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - fix/invalid-github-token-message
   workflow_dispatch:
     inputs:
       mode:
