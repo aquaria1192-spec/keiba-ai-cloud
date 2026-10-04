@@ -25,7 +25,7 @@ BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
-EVALUATION_STORE_API_VERSION = 4
+EVALUATION_STORE_API_VERSION = 5
 
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
@@ -622,35 +622,72 @@ def _latest_snapshot_id_for_race(hist, date_iso, course, race_no):
     times=q.groupby("snapshot_id")["_dt"].max().sort_values()
     return str(times.index[-1]) if len(times) else ""
 
-def _main_answer_fields(snap):
-    """Return answer-check fields for the saved ◎ horse."""
+def _mark_answer_fields(snap, marks=("◎","○","▲")):
+    """Return saved mark horses and their exact 1st/2nd/3rd result fields."""
+    out={}
     if snap is None or len(snap)==0:
-        return {
-            "◎本命":"","◎着順":"","◎単勝":"判定不可",
-            "◎2着":"判定不可","◎3着内":"判定不可",
-        }
-    q=snap[snap["mark"].astype(str)=="◎"].copy()
-    if q.empty:
-        q=snap.sort_values("rank").head(1).copy()
-    r=q.iloc[0]
-    no=pd.to_numeric(pd.Series([r.get("horse_no")]),errors="coerce").iloc[0]
-    no_text="" if pd.isna(no) else str(int(no))
-    name=str(r.get("horse_name","") or "").strip()
-    main_text=(no_text+" "+name).strip()
-    fi=pd.to_numeric(pd.Series([r.get("actual_finish")]),errors="coerce").iloc[0]
-    if pd.isna(fi):
-        return {
-            "◎本命":main_text,"◎着順":"","◎単勝":"未判定",
-            "◎2着":"未判定","◎3着内":"未判定",
-        }
-    fi=int(fi)
-    return {
-        "◎本命":main_text,
-        "◎着順":fi,
-        "◎単勝":"的中" if fi==1 else "不的中",
-        "◎2着":"的中" if fi==2 else "不的中",
-        "◎3着内":"的中" if fi<=3 else "不的中",
-    }
+        for mark in marks:
+            out.update({
+                f"{mark}馬":"",
+                f"{mark}着順":"",
+                f"{mark}1着":"判定不可",
+                f"{mark}2着":"判定不可",
+                f"{mark}3着":"判定不可",
+                f"{mark}3着内":"判定不可",
+            })
+        return out
+
+    ranked=snap.copy()
+    ranked["_rank_num"]=pd.to_numeric(ranked.get("rank"),errors="coerce")
+    rank_fallback={"◎":1,"○":2,"▲":3}
+    for mark in marks:
+        q=ranked[ranked["mark"].astype(str)==mark].copy()
+        if q.empty and mark in rank_fallback:
+            q=ranked[ranked["_rank_num"]==rank_fallback[mark]].copy()
+        if q.empty:
+            out.update({
+                f"{mark}馬":"",
+                f"{mark}着順":"",
+                f"{mark}1着":"判定不可",
+                f"{mark}2着":"判定不可",
+                f"{mark}3着":"判定不可",
+                f"{mark}3着内":"判定不可",
+            })
+            continue
+        r=q.iloc[0]
+        no=pd.to_numeric(pd.Series([r.get("horse_no")]),errors="coerce").iloc[0]
+        no_text="" if pd.isna(no) else str(int(no))
+        name=str(r.get("horse_name","") or "").strip()
+        horse_text=(no_text+" "+name).strip()
+        fi=pd.to_numeric(pd.Series([r.get("actual_finish")]),errors="coerce").iloc[0]
+        if pd.isna(fi):
+            out.update({
+                f"{mark}馬":horse_text,
+                f"{mark}着順":"",
+                f"{mark}1着":"未判定",
+                f"{mark}2着":"未判定",
+                f"{mark}3着":"未判定",
+                f"{mark}3着内":"未判定",
+            })
+            continue
+        fi=int(fi)
+        out.update({
+            f"{mark}馬":horse_text,
+            f"{mark}着順":fi,
+            f"{mark}1着":"的中" if fi==1 else "不的中",
+            f"{mark}2着":"的中" if fi==2 else "不的中",
+            f"{mark}3着":"的中" if fi==3 else "不的中",
+            f"{mark}3着内":"的中" if fi<=3 else "不的中",
+        })
+    return out
+
+
+def _main_answer_fields(snap):
+    """Backward-compatible ◎ fields plus ○/▲ exact finishing fields."""
+    out=_mark_answer_fields(snap)
+    out["◎本命"]=out.get("◎馬","")
+    out["◎単勝"]=out.get("◎1着","判定不可")
+    return out
 
 def settle_day_snapshots(
     backend,
@@ -900,6 +937,19 @@ def settle_day_snapshots(
     second_hits=int((evaluated.get("◎2着",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     top3_hits=int((evaluated.get("◎3着内",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     evaluated_races=int(len(evaluated))
+    mark_position_stats={}
+    for mark in ("◎","○","▲"):
+        stats={}
+        for pos in (1,2,3):
+            col=f"{mark}{pos}着"
+            hits=int((evaluated.get(col,pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
+            stats[f"{pos}着数"]=hits
+            stats[f"{pos}着率"]=hits/evaluated_races if evaluated_races else np.nan
+        top3_col=f"{mark}3着内"
+        top3_mark_hits=int((evaluated.get(top3_col,pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
+        stats["3着内数"]=top3_mark_hits
+        stats["3着内率"]=top3_mark_hits/evaluated_races if evaluated_races else np.nan
+        mark_position_stats[mark]=stats
     return {
         "date":date_iso,
         "total":int(len(report)),
@@ -914,6 +964,7 @@ def settle_day_snapshots(
         "main_win_rate":win_hits/evaluated_races if evaluated_races else np.nan,
         "main_second_rate":second_hits/evaluated_races if evaluated_races else np.nan,
         "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
+        "mark_position_stats":mark_position_stats,
         "save_mode":save_info.get("mode",getattr(backend,"mode","")),
         "saved_result_races":len(settled_sids),
         "save_verified":bool(not changed or settled_sids),
@@ -980,20 +1031,36 @@ def mark_summary(history):
     h=settled_latest(history)
     if h.empty:
         return pd.DataFrame()
-    for c in ["actual_win","actual_top3","win_prob"]:
+    for c in ["actual_win","actual_top3","actual_finish","win_prob"]:
         h[c]=pd.to_numeric(h[c],errors="coerce")
+    h["_first"]=(h["actual_finish"]==1).astype(int)
+    h["_second"]=(h["actual_finish"]==2).astype(int)
+    h["_third"]=(h["actual_finish"]==3).astype(int)
     out=h.groupby("mark",dropna=False).agg({
-        "horse_no":"count","actual_win":"sum","actual_top3":"sum","win_prob":"mean"
+        "horse_no":"count",
+        "_first":"sum",
+        "_second":"sum",
+        "_third":"sum",
+        "actual_top3":"sum",
+        "win_prob":"mean",
     }).reset_index()
     out=out.rename(columns={
-        "mark":"印","horse_no":"出走数","actual_win":"勝利数",
+        "mark":"印","horse_no":"出走数",
+        "_first":"1着数","_second":"2着数","_third":"3着数",
         "actual_top3":"3着内数","win_prob":"平均予測勝率",
     })
-    out["勝率"]=out["勝利数"]/out["出走数"]
+    for pos in (1,2,3):
+        out[f"{pos}着率"]=out[f"{pos}着数"]/out["出走数"]
+    out["勝率"]=out["1着率"]
     out["3着内率"]=out["3着内数"]/out["出走数"]
     order={"◎":1,"○":2,"▲":3,"△":4,"☆":5,"注":6,"×":7}
     out["_o"]=out["印"].map(order).fillna(99)
-    return out.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+    cols=[
+        "印","出走数","1着数","2着数","3着数","3着内数",
+        "1着率","2着率","3着率","3着内率","平均予測勝率",
+    ]
+    out=out.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+    return out[[col for col in cols if col in out.columns]]
 
 def condition_summary(history):
     h=settled_latest(history)
