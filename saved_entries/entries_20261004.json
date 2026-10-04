@@ -1,0 +1,127 @@
+{
+  "date": "2026-10-04",
+  "races": 23,
+  "rows": 348,
+  "errors": [],
+  "excluded": {
+    "202605040204": "障害3歳以上未勝利（障害3000m）"
+  },
+  "race_id_map": {
+    "東京|1R": "202605040201",
+    "東京|2R": "202605040202",
+    "東京|3R": "202605040203",
+    "東京|5R": "202605040205",
+    "東京|6R": "202605040206",
+    "東京|7R": "202605040207",
+    "東京|8R": "202605040208",
+    "東京|9R": "202605040209",
+    "東京|10R": "202605040210",
+    "東京|11R": "202605040211",
+    "東京|12R": "202605040212",
+    "京都|1R": "202608040201",
+    "京都|2R": "202608040202",
+    "京都|3R": "202608040203",
+    "京都|4R": "202608040204",
+    "京都|5R": "202608040205",
+    "京都|6R": "202608040206",
+    "京都|7R": "202608040207",
+    "京都|8R": "202608040208",
+    "京都|9R": "202608040209",
+    "京都|10R": "202608040210",
+    "京都|11R": "202608040211",
+    "京都|12R": "202608040212"
+  },
+  "official_entry_urls": {},
+  "going_changed_rows": 0,
+  "body_weight_count": 29,
+  "odds_count": 70,
+  "_saved_contexts": {
+    "京都": {
+      "course": "京都",
+      "race_date": "2026-10-04",
+      "status_time": "",
+      "jra_weather": "曇",
+      "turf_going": "良",
+      "dirt_going": "良",
+      "cushion": null,
+      "turf_goal": 7.8,
+      "turf_corner": 8.1,
+      "dirt_goal": 5.4,
+      "dirt_corner": 6.0,
+      "used_course": "A コース（内柵を最内に設置） A 芝の状態 第3回京都競馬終了後、傷みの激しかった向正面・3コーナーから4コーナーおよび正面のコース内側を中心に約27,200平方メートルの芝張替を行い、芝の生育促進に努め、8月下旬にオーバーシードを実施しました。野芝・洋芝共に生育は順調で全体的に良好な状態です。 芝の状態",
+      "turf_state": "第3回京都競馬終了後、傷みの激しかった向正面・3コーナーから4コーナーおよび正面のコース内側を中心に約27,200平方メートルの芝張替を行い、芝の生育促進に努め、8月下旬にオーバーシードを実施しました。野芝・洋芝共に生育は順調で全体的に良好な状態です。 芝コースの様子 撮影日：9月24日（木曜） /",
+      "jra_baba_url": "https://www.jra.go.jp/keiba/baba/index2.html",
+      "is_target_date": true,
+      "turf_going_source": "取得出走表（当日）",
+      "dirt_going_source": "取得出走表（当日）",
+      "weather_source": "公開出馬表（当日）",
+      "public_source_urls": [
+        "https://race.netkeiba.com/race/shutuba.html?race_id=202608040210",
+        "https://race.netkeiba.com/race/shutuba.html?race_id=202608040212"
+      ],
+      "live_condition_ok": false,
+      "public_condition_ok": true,
+      "current_condition_ok": true,
+      "condition_errors": [
+        "JRA公式出馬表URLを取得できません"
+      ],
+      "weather": {
+        "forecast_time": "2026-10-04T14:00",
+        "temperature_c": 19.1,
+        "precipitation_mm": 0.9,
+        "rain_mm": 0.9,
+        "precip_probability": 89.0,
+        "wind_kmh": 4.3,
+        "wind_gust_kmh": 21.2,
+        "weather_code": 53,
+        "weather_text": "霧雨",
+        "source": "Open-Meteo"
+      }
+    },
+    "東京": {
+      "course": "東京",
+      "race_date": "2026-10-04",
+      "status_time": "",
+      "jra_weather": "曇",
+      "turf_going": "良",
+      "dirt_going": "良",
+      "cushion": null,
+      "turf_goal": 14.9,
+      "turf_corner": 13.4,
+      "dirt_goal": 7.2,
+      "dirt_corner": 7.2,
+      "used_course": "A コース（内柵を最内に設置） A 芝の状態 第3回東京競馬終了後、コース内側を中心に約37,000平方メートルの芝張替を行いました。その後、肥料散布・薬剤散布・芝刈り等の管理作業を行い、芝の生育管理に努め、9月上旬にオーバーシードとして洋芝を播種しました。野芝・洋芝共に順調に生育しており、全体的に良好な状態です。 芝の状態",
+      "turf_state": "第3回東京競馬終了後、コース内側を中心に約37,000平方メートルの芝張替を行いました。その後、肥料散布・薬剤散布・芝刈り等の管理作業を行い、芝の生育管理に努め、9月上旬にオーバーシードとして洋芝を播種しました。野芝・洋芝共に順調に生育しており、全体的に良好な状態です。 芝コースの様子 撮影日：9月24日（木曜） /",
+      "jra_baba_url": "https://www.jra.go.jp/keiba/baba/",
+      "is_target_date": true,
+      "turf_going_source": "取得出走表（当日）",
+      "dirt_going_source": "取得出走表（当日）",
+      "weather_source": "公開出馬表（当日）",
+      "public_source_urls": [
+        "https://race.netkeiba.com/race/shutuba.html?race_id=202605040211",
+        "https://race.netkeiba.com/race/shutuba.html?race_id=202605040212"
+      ],
+      "live_condition_ok": false,
+      "public_condition_ok": true,
+      "current_condition_ok": true,
+      "condition_errors": [
+        "JRA公式出馬表URLを取得できません"
+      ],
+      "weather": {
+        "forecast_time": "2026-10-04T14:00",
+        "temperature_c": 21.7,
+        "precipitation_mm": 0.0,
+        "rain_mm": 0.0,
+        "precip_probability": 0.0,
+        "wind_kmh": 6.2,
+        "wind_gust_kmh": 26.6,
+        "weather_code": 2,
+        "weather_text": "一部曇",
+        "source": "Open-Meteo"
+      }
+    }
+  },
+  "saved_at": "2026-10-04T09:34:00+09:00",
+  "saved_rows": 348,
+  "saved_races": 23
+}
