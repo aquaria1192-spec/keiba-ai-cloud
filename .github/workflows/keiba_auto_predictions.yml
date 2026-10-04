@@ -1,6 +1,9 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
+  push:
+    branches:
+      - fix/invalid-github-token-message
   workflow_dispatch:
     inputs:
       mode:
@@ -76,6 +79,19 @@ jobs:
           # must reload evaluation_store until this API is available.
           assert evaluation_store.EVALUATION_STORE_API_VERSION >= 4
           assert entry_data_store.ENTRY_DATA_STORE_API_VERSION >= 2
+          assert github_storage_config._token_format_issue(
+              "github_pat_ここにFine-grained-token"
+          )=="non_ascii"
+          assert github_storage_config._token_format_issue(
+              "github_pat_validASCII123"
+          )==""
+          bad_diag=github_storage_config.diagnose_github_storage(
+              "github_pat_ここにFine-grained-token",
+              "aquaria1192-spec/keiba-ai-cloud",
+              "prediction-history",
+          )
+          assert bad_diag["status"]=="invalid_token_format"
+          assert "ASCII以外" in bad_diag["detail"]
 
           # GitHub token resolver accepts direct, nested and environment layouts.
           token,source=github_storage_config.resolve_token({"GITHUB_TOKEN":"direct-token"})
@@ -314,6 +330,8 @@ jobs:
           app=Path("streamlit_app.py").read_text(encoding="utf-8")
           assert "GitHub永続保存用トークンをアプリから認識できていません" in app
           assert "GitHub保存を診断" in app
+          assert "invalid_token_format" in app
+          assert "実際にGitHubで発行されたトークン" in app
           assert 'EVALUATION_STORE_API_VERSION", 0) < 4' in app
           assert 'ENTRY_DATA_STORE_API_VERSION", 0) < 2' in app
           assert "token_source" in app
