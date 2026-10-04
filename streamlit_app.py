@@ -11,7 +11,7 @@ import streamlit as st
 
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
-from batch_predict import batch_predict_day, mark_legend
+from batch_predict import batch_predict_day, mark_legend, recommended_bets
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
@@ -23,7 +23,7 @@ from race_day_context import (
 # signature. Version-check + reload prevents mixed-version calls such as
 # "unexpected keyword argument 'learning_store'".
 import evaluation_store as _evaluation_store
-if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 4:
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 5:
     _evaluation_store = importlib.reload(_evaluation_store)
 
 HistoryBackend = _evaluation_store.HistoryBackend
@@ -52,7 +52,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.12",
+    page_title="競馬予想AI Cloud Ver.1.13",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -247,6 +247,24 @@ def show_prediction(detail, context, bias):
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
 
+    st.markdown("#### 買い目")
+    bet_plan=recommended_bets(rg)
+    bet_rows=[
+        {"券種":label,"買い目":bet_plan.get(label,"")}
+        for label in ["単勝","馬連","ワイド","三連複","三連単"]
+        if bet_plan.get(label,"")
+    ]
+    if bet_rows:
+        st.dataframe(
+            pd.DataFrame(bet_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "買い目は◎本命・○対抗・▲単穴を中心にしたAI予想上の候補です。"
+            " 金額配分や収益を保証するものではありません。"
+        )
+
     return rg
 
 def default_race_date():
@@ -275,9 +293,9 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.12")
+st.title("🏇 競馬予想AI Cloud Ver.1.13")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
-st.caption("開催地ごと全レース一括予想＋当日馬場・騎手データ・単勝/3着内的中率集計")
+st.caption("開催地ごと全レース一括予想＋買い目候補＋当日馬場・騎手データ＋◎○▲の1～3着率集計")
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -627,6 +645,7 @@ with st.container(border=True):
                         )
                         race_name=str(rdf.iloc[0].get("race_name","")).strip() if len(rdf) else ""
                         going=str(rg.iloc[0].get("going",""))
+                        bet_plan=recommended_bets(rg)
                         summary_rows.append({
                             "レース":race_key,
                             "レース名":(
@@ -644,6 +663,7 @@ with st.container(border=True):
                             "AI指数":top.get("ai_index",np.nan),
                             "単勝オッズ":top.get("odds",np.nan),
                             "AI上位差":gap,
+                            "買い目":bet_plan.get("買い目",""),
                             "当日傾向":(bias or {}).get("summary","データなし"),
                         })
 
@@ -662,7 +682,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.12",
+                                "1.13",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -938,6 +958,23 @@ with st.container(border=True):
                     f"**◎3着内** {result.get('main_top3_hits',0)}/{evaluated}R "
                     f"（{result.get('main_top3_rate',0)*100:.1f}%）"
                 )
+                mark_stats=result.get("mark_position_stats") or {}
+                rows=[]
+                labels={"◎":"本命","○":"対抗","▲":"単穴"}
+                for mark in ("◎","○","▲"):
+                    stats=mark_stats.get(mark) or {}
+                    rows.append({
+                        "印":f"{mark}{labels[mark]}",
+                        "1着率":stats.get("1着率",np.nan),
+                        "2着率":stats.get("2着率",np.nan),
+                        "3着率":stats.get("3着率",np.nan),
+                        "3着内率":stats.get("3着内率",np.nan),
+                    })
+                q=pd.DataFrame(rows)
+                for col in ["1着率","2着率","3着率","3着内率"]:
+                    q[col]=pd.to_numeric(q[col],errors="coerce").map(pct)
+                st.markdown("**◎・○・▲の1～3着実績率**")
+                st.dataframe(q,use_container_width=True,hide_index=True)
         except Exception as ex:
             progress.empty()
             st.error(f"1日まとめて答え合わせできませんでした：{ex}")
@@ -1018,7 +1055,8 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
 
             st.caption(
                 "答え合わせは、開催地ごとに固定保存した予想と実際の着順を比較し、"
-                "◎本命の単勝的中率・2着率・3着内率、印別成績、確率精度を集計します。"
+                "◎本命に加え、○対抗・▲単穴の1着率・2着率・3着率・3着内率、"
+                "印別成績、確率精度を集計します。"
             )
 
             t1,t2,t3,t4=st.tabs(
@@ -1027,7 +1065,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
             with t1:
                 q=mark_summary(history)
                 if len(q):
-                    for col in ["勝率","3着内率","平均予測勝率"]:
+                    for col in ["1着率","2着率","3着率","3着内率","平均予測勝率"]:
                         q[col]=pd.to_numeric(q[col],errors="coerce").map(
                             lambda x:"-" if pd.isna(x) else f"{x*100:.1f}%"
                         )
@@ -1081,7 +1119,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.12の自動学習について"):
+with st.expander("Ver.1.13の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
