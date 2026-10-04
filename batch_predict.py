@@ -43,6 +43,86 @@ def mark_label(mark):
 def mark_legend():
     return "◎本命　○対抗　▲単穴　△連下　☆穴　注注意　×低評価"
 
+
+def recommended_bets(detail):
+    """
+    Build compact ticket combinations from the top three AI marks.
+
+    This intentionally suggests combinations only; it does not calculate stake
+    amounts or expected profit. The selections are deterministic from ◎○▲ so
+    the UI and saved prediction remain easy to explain.
+    """
+    if detail is None or len(detail) == 0:
+        return {
+            "単勝": "",
+            "馬連": "",
+            "ワイド": "",
+            "三連複": "",
+            "三連単": "",
+            "買い目": "",
+        }
+
+    d = detail.copy()
+    rank_num = pd.to_numeric(d.get("順位"), errors="coerce")
+    d = d.assign(_rank_num=rank_num).sort_values("_rank_num")
+
+    def pick(mark, fallback_rank):
+        q = d[d.get("印", pd.Series(index=d.index, dtype=object)).astype(str) == mark]
+        if q.empty:
+            q = d[d["_rank_num"] == fallback_rank]
+        if q.empty:
+            return ""
+        no = pd.to_numeric(pd.Series([q.iloc[0].get("horse_no")]), errors="coerce").iloc[0]
+        return "" if pd.isna(no) else str(int(no))
+
+    main = pick("◎", 1)
+    second = pick("○", 2)
+    third = pick("▲", 3)
+    if not main:
+        return {
+            "単勝": "",
+            "馬連": "",
+            "ワイド": "",
+            "三連複": "",
+            "三連単": "",
+            "買い目": "",
+        }
+
+    win = main
+    quinella = " / ".join(
+        x for x in [f"{main}-{second}" if second else "", f"{main}-{third}" if third else ""]
+        if x
+    )
+    wide = " / ".join(
+        x for x in [
+            f"{main}-{second}" if second else "",
+            f"{main}-{third}" if third else "",
+            f"{second}-{third}" if second and third else "",
+        ] if x
+    )
+    trio = f"{main}-{second}-{third}" if main and second and third else ""
+    trifecta = " / ".join(
+        x for x in [
+            f"{main}→{second}→{third}" if main and second and third else "",
+            f"{main}→{third}→{second}" if main and second and third else "",
+        ] if x
+    )
+    parts = []
+    for label, value in [
+        ("単勝", win), ("馬連", quinella), ("ワイド", wide),
+        ("三連複", trio), ("三連単", trifecta),
+    ]:
+        if value:
+            parts.append(f"{label} {value}")
+    return {
+        "単勝": win,
+        "馬連": quinella,
+        "ワイド": wide,
+        "三連複": trio,
+        "三連単": trifecta,
+        "買い目": "｜".join(parts),
+    }
+
 def race_display(row):
     rno = str(row.get("race_no",""))
     name = str(row.get("race_name","")).strip()
@@ -91,6 +171,7 @@ def batch_predict_day(entries_features, date_value, trained_models, weights):
             (pd.to_numeric(p["expected_value"],errors="coerce") >= 1.0) &
             (pd.to_numeric(p["value_gap"],errors="coerce") > 0)
         ]
+        bet_plan = recommended_bets(p)
         summary_rows.append({
             "開催日": str(date_value),
             "競馬場": str(course),
@@ -106,6 +187,7 @@ def batch_predict_day(entries_features, date_value, trained_models, weights):
             "本命AI期待値": top.get("expected_value",np.nan),
             "AI指数差": ai_gap,
             "期待値1以上頭数": len(value),
+            "買い目": bet_plan.get("買い目", ""),
         })
 
     detail = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
