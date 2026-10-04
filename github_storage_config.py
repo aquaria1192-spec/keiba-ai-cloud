@@ -92,6 +92,26 @@ def github_headers(token: str):
     }
 
 
+def _token_format_issue(token: str):
+    token = str(token or "").strip()
+    if not token:
+        return "missing"
+    try:
+        token.encode("ascii")
+    except UnicodeEncodeError:
+        return "non_ascii"
+    if any(ch.isspace() for ch in token):
+        return "whitespace"
+    if "ここに" in token or "token" == token.lower():
+        return "placeholder"
+    # GitHub user tokens commonly begin with github_pat_ (fine-grained)
+    # or ghp_/gho_/ghu_/ghs_/ghr_ (classic/app-related token types).
+    allowed_prefixes = ("github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_")
+    if not token.startswith(allowed_prefixes):
+        return "unexpected_prefix"
+    return ""
+
+
 def diagnose_github_storage(token: str, repo: str, branch: str, timeout=12):
     """Read-only GitHub diagnostics. Never returns or logs the token."""
     result = {
@@ -104,8 +124,38 @@ def diagnose_github_storage(token: str, repo: str, branch: str, timeout=12):
         "status": "token_missing" if not token else "checking",
         "detail": "",
     }
-    if not token:
+    issue = _token_format_issue(token)
+    if issue == "missing":
         result["detail"] = "GITHUB_TOKEN をアプリから認識できていません。"
+        return result
+    if issue == "non_ascii":
+        result["status"] = "invalid_token_format"
+        result["detail"] = (
+            "GITHUB_TOKEN に日本語などASCII以外の文字が含まれています。"
+            " Secretsの例文ではなく、GitHubで実際に発行された"
+            " github_pat_... を設定してください。"
+        )
+        return result
+    if issue == "whitespace":
+        result["status"] = "invalid_token_format"
+        result["detail"] = (
+            "GITHUB_TOKEN に空白または改行が含まれています。"
+            " トークン本体だけを貼り付けてください。"
+        )
+        return result
+    if issue == "placeholder":
+        result["status"] = "invalid_token_format"
+        result["detail"] = (
+            "GITHUB_TOKEN がサンプル文字列のままです。"
+            " GitHubで実際に発行された github_pat_... に置き換えてください。"
+        )
+        return result
+    if issue == "unexpected_prefix":
+        result["status"] = "invalid_token_format"
+        result["detail"] = (
+            "GITHUB_TOKEN の形式を確認できません。"
+            " Fine-grained personal access tokenなら通常 github_pat_... で始まります。"
+        )
         return result
 
     headers = github_headers(token)
