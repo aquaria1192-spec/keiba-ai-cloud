@@ -52,7 +52,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.12",
+    page_title="競馬予想AI Cloud Ver.1.13",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -293,7 +293,7 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.12")
+st.title("🏇 競馬予想AI Cloud Ver.1.13")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地ごと全レース一括予想＋買い目候補＋当日馬場・騎手データ＋◎○▲の1～3着率集計")
 st.markdown("""
@@ -682,7 +682,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.12",
+                                "1.13",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -1119,7 +1119,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.12の自動学習について"):
+with st.expander("Ver.1.13の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
