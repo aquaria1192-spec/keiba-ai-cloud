@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import importlib
+import json
 import joblib
 import pandas as pd
 import numpy as np
@@ -12,6 +13,7 @@ import streamlit as st
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day, mark_legend, recommended_bets
+from betting_tools import fetch_market_odds, plan_from_json, plan_to_json
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
@@ -23,7 +25,7 @@ from race_day_context import (
 # signature. Version-check + reload prevents mixed-version calls such as
 # "unexpected keyword argument 'learning_store'".
 import evaluation_store as _evaluation_store
-if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 5:
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 6:
     _evaluation_store = importlib.reload(_evaluation_store)
 
 HistoryBackend = _evaluation_store.HistoryBackend
@@ -52,7 +54,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.13",
+    page_title="競馬予想AI Cloud Ver.1.14",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -127,6 +129,10 @@ def fetch_bias_cached(date_iso, course, race_no, surface, official_items):
     return fetch_same_day_bias(
         pd.Timestamp(date_iso).date(),course,rn,surface,official
     )
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_betting_odds_cached(race_id: str):
+    return fetch_market_odds(race_id)
 
 def pct(v):
     return "-" if pd.isna(v) else f"{float(v)*100:.1f}%"
@@ -247,23 +253,42 @@ def show_prediction(detail, context, bias):
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
 
-    st.markdown("#### 買い目")
-    bet_plan=recommended_bets(rg)
-    bet_rows=[
-        {"券種":label,"買い目":bet_plan.get(label,"")}
-        for label in ["単勝","馬連","ワイド","三連複","三連単"]
-        if bet_plan.get(label,"")
-    ]
-    if bet_rows:
-        st.dataframe(
-            pd.DataFrame(bet_rows),
-            use_container_width=True,
-            hide_index=True,
+    st.markdown("#### オッズから選ぶ買い目")
+    saved_plan={}
+    if "bet_plan_json" in rg.columns and len(rg):
+        saved_plan=plan_from_json(rg.iloc[0].get("bet_plan_json",""))
+    bet_plan=saved_plan or recommended_bets(rg)
+    tickets=list(bet_plan.get("tickets") or [])
+    if tickets:
+        bet_rows=[]
+        for t in tickets:
+            bet_rows.append({
+                "券種":t.get("bet_type",""),
+                "買い目":t.get("combo",""),
+                "現在オッズ":t.get("odds",np.nan),
+                "AI的中推定":t.get("probability",np.nan),
+                "期待値":t.get("ev",np.nan),
+                "購入額":f"{int(t.get('stake',100) or 100)}円",
+            })
+        bq=pd.DataFrame(bet_rows)
+        if "AI的中推定" in bq:
+            bq["AI的中推定"]=pd.to_numeric(
+                bq["AI的中推定"],errors="coerce"
+            ).map(pct)
+        for col in ["現在オッズ","期待値"]:
+            if col in bq:
+                bq[col]=pd.to_numeric(bq[col],errors="coerce").round(2)
+        st.dataframe(bq,use_container_width=True,hide_index=True)
+        st.write(
+            f"**{len(tickets)}点 × 100円 = "
+            f"{int(bet_plan.get('stake_total',len(tickets)*100)):,}円**"
         )
         st.caption(
-            "買い目は◎本命・○対抗・▲単穴を中心にしたAI予想上の候補です。"
-            " 金額配分や収益を保証するものではありません。"
+            "AI推定確率と現在オッズから期待値を計算し、基準を超えた組合せだけを表示します。"
+            " ワイドは表示オッズの下限で期待値を計算します。"
         )
+    else:
+        st.info(str(bet_plan.get("reason") or "オッズ上の妙味がないため、このレースは見送りです。"))
 
     return rg
 
@@ -293,9 +318,9 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.13")
+st.title("🏇 競馬予想AI Cloud Ver.1.14")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
-st.caption("開催地ごと全レース一括予想＋買い目候補＋当日馬場・騎手データ＋◎○▲の1～3着率集計")
+st.caption("開催地ごと全レース一括予想＋オッズ期待値買い目＋100円収支＋◎○▲の1～3着率集計")
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -627,7 +652,27 @@ with st.container(border=True):
                         )
                         rd=apply_online_adapter(rd,online_adapter)
 
-                        # Freeze only the prediction at venue-batch time.
+                        race_id=(info.get("race_id_map") or {}).get(
+                            f"{course}|{race_key}",""
+                        )
+                        market_odds={}
+                        if race_id:
+                            try:
+                                market_odds=fetch_betting_odds_cached(str(race_id))
+                            except Exception:
+                                market_odds={}
+                        bet_plan=recommended_bets(
+                            rd,
+                            market_odds=market_odds,
+                            race_id=str(race_id or ""),
+                            stake_per_ticket=100,
+                        )
+                        rd["bet_style"]="odds_value_v1"
+                        rd["bet_budget"]=int(bet_plan.get("stake_total",0) or 0)
+                        rd["bet_plan_json"]=plan_to_json(bet_plan)
+
+                        # Freeze prediction probabilities and the odds-based bet
+                        # plan at venue-batch time for later answer checking.
                         # Answer checking evaluates prediction accuracy, not betting ROI.
                         rd["snapshot_type"]="course_batch"
                         rd["auto_generated"]=False
@@ -645,7 +690,6 @@ with st.container(border=True):
                         )
                         race_name=str(rdf.iloc[0].get("race_name","")).strip() if len(rdf) else ""
                         going=str(rg.iloc[0].get("going",""))
-                        bet_plan=recommended_bets(rg)
                         summary_rows.append({
                             "レース":race_key,
                             "レース名":(
@@ -664,6 +708,7 @@ with st.container(border=True):
                             "単勝オッズ":top.get("odds",np.nan),
                             "AI上位差":gap,
                             "買い目":bet_plan.get("買い目",""),
+                            "100円購入額":int(bet_plan.get("stake_total",0) or 0),
                             "当日傾向":(bias or {}).get("summary","データなし"),
                         })
 
@@ -1119,7 +1164,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.13の自動学習について"):
+with st.expander("Ver.1.14の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
