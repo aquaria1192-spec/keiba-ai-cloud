@@ -727,7 +727,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.13",
+                                "1.14",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -1020,6 +1020,20 @@ with st.container(border=True):
                     q[col]=pd.to_numeric(q[col],errors="coerce").map(pct)
                 st.markdown("**◎・○・▲の1～3着実績率**")
                 st.dataframe(q,use_container_width=True,hide_index=True)
+
+                settled_bets=int(result.get("bet_settled_races",0) or 0)
+                if settled_bets:
+                    stake=int(result.get("bet_stake_total",0) or 0)
+                    payout=int(result.get("bet_payout_total",0) or 0)
+                    profit=int(result.get("bet_profit_total",0) or 0)
+                    st.markdown("**100円ずつ購入した場合の収支**")
+                    a,b,c1,d=st.columns(4)
+                    a.metric("精算済み",f"{settled_bets}R")
+                    b.metric("購入額",f"{stake:,}円")
+                    c1.metric("払戻額",f"{payout:,}円")
+                    d.metric("収支",f"{profit:+,}円")
+                    if stake:
+                        st.caption(f"回収率：{payout/stake*100:.1f}%")
         except Exception as ex:
             progress.empty()
             st.error(f"1日まとめて答え合わせできませんでした：{ex}")
