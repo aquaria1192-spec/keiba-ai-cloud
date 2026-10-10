@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from model_compare import ensemble_predict
+from betting_tools import build_value_bet_plan
 
 def mark_for_rank(rank, field_size):
     """
@@ -44,84 +45,23 @@ def mark_legend():
     return "◎本命　○対抗　▲単穴　△連下　☆穴　注注意　×低評価"
 
 
-def recommended_bets(detail):
-    """
-    Build compact ticket combinations from the top three AI marks.
-
-    This intentionally suggests combinations only; it does not calculate stake
-    amounts or expected profit. The selections are deterministic from ◎○▲ so
-    the UI and saved prediction remain easy to explain.
-    """
-    if detail is None or len(detail) == 0:
-        return {
-            "単勝": "",
-            "馬連": "",
-            "ワイド": "",
-            "三連複": "",
-            "三連単": "",
-            "買い目": "",
-        }
-
-    d = detail.copy()
-    rank_num = pd.to_numeric(d.get("順位"), errors="coerce")
-    d = d.assign(_rank_num=rank_num).sort_values("_rank_num")
-
-    def pick(mark, fallback_rank):
-        q = d[d.get("印", pd.Series(index=d.index, dtype=object)).astype(str) == mark]
-        if q.empty:
-            q = d[d["_rank_num"] == fallback_rank]
-        if q.empty:
-            return ""
-        no = pd.to_numeric(pd.Series([q.iloc[0].get("horse_no")]), errors="coerce").iloc[0]
-        return "" if pd.isna(no) else str(int(no))
-
-    main = pick("◎", 1)
-    second = pick("○", 2)
-    third = pick("▲", 3)
-    if not main:
-        return {
-            "単勝": "",
-            "馬連": "",
-            "ワイド": "",
-            "三連複": "",
-            "三連単": "",
-            "買い目": "",
-        }
-
-    win = main
-    quinella = " / ".join(
-        x for x in [f"{main}-{second}" if second else "", f"{main}-{third}" if third else ""]
-        if x
+def recommended_bets(
+    detail,
+    market_odds=None,
+    race_id="",
+    stake_per_ticket=100,
+    min_ev=1.05,
+    max_tickets=8,
+):
+    """Odds-aware buy selections using AI probabilities × current market odds."""
+    return build_value_bet_plan(
+        detail,
+        market_odds=market_odds,
+        race_id=race_id,
+        stake_per_ticket=stake_per_ticket,
+        min_ev=min_ev,
+        max_tickets=max_tickets,
     )
-    wide = " / ".join(
-        x for x in [
-            f"{main}-{second}" if second else "",
-            f"{main}-{third}" if third else "",
-            f"{second}-{third}" if second and third else "",
-        ] if x
-    )
-    trio = f"{main}-{second}-{third}" if main and second and third else ""
-    trifecta = " / ".join(
-        x for x in [
-            f"{main}→{second}→{third}" if main and second and third else "",
-            f"{main}→{third}→{second}" if main and second and third else "",
-        ] if x
-    )
-    parts = []
-    for label, value in [
-        ("単勝", win), ("馬連", quinella), ("ワイド", wide),
-        ("三連複", trio), ("三連単", trifecta),
-    ]:
-        if value:
-            parts.append(f"{label} {value}")
-    return {
-        "単勝": win,
-        "馬連": quinella,
-        "ワイド": wide,
-        "三連複": trio,
-        "三連単": trifecta,
-        "買い目": "｜".join(parts),
-    }
 
 def race_display(row):
     rno = str(row.get("race_no",""))

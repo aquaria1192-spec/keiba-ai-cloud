@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+from betting_tools import parse_payouts_html, plan_from_json, settle_bet_plan
 from github_storage_config import (
     resolve_secret, resolve_token, resolve_history_repo, resolve_history_branch
 )
@@ -25,7 +26,7 @@ BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
-EVALUATION_STORE_API_VERSION = 5
+EVALUATION_STORE_API_VERSION = 6
 
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
@@ -464,6 +465,14 @@ def generic_result_parse(html):
             return {"rows":pd.DataFrame(rows)}
     return {"rows":pd.DataFrame()}
 
+def _public_payouts_for_race_id(session,race_id):
+    if not race_id:
+        return {}, ""
+    url=f"https://race.netkeiba.com/race/result.html?race_id={race_id}"
+    r=session.get(url,timeout=20)
+    r.raise_for_status()
+    return parse_payouts_html(r.text),url
+
 def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_map=None):
     s=_session()
     rn=int(str(race_no).upper().replace("R","").strip())
@@ -510,7 +519,18 @@ def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_m
             r.raise_for_status()
             p=generic_result_parse(r.text)
             if len(p.get("rows",pd.DataFrame())):
-                p.update({"result_url":u,"source":"JRA公式"})
+                payouts={}
+                payout_url=""
+                try:
+                    payouts,payout_url=_public_payouts_for_race_id(s,rid)
+                except Exception as pe:
+                    errors.append(f"払戻取得 {rid}={pe}")
+                p.update({
+                    "result_url":u,
+                    "source":"JRA公式",
+                    "payouts":payouts,
+                    "payout_url":payout_url,
+                })
                 return p
             errors.append(f"JRA公式 {rid}: 結果表を解析できません")
         except Exception as e:
@@ -533,7 +553,12 @@ def fetch_race_result(date_iso,course,race_no,official_entry_urls=None,race_id_m
             r.raise_for_status()
             p=generic_result_parse(r.text)
             if len(p.get("rows",pd.DataFrame())):
-                p.update({"result_url":u,"source":"公開レース結果"})
+                p.update({
+                    "result_url":u,
+                    "source":"公開レース結果",
+                    "payouts":parse_payouts_html(r.text),
+                    "payout_url":u,
+                })
                 return p
             errors.append(f"予備結果 {rid}: 結果表を解析できません")
         except Exception as e:
@@ -621,6 +646,69 @@ def _latest_snapshot_id_for_race(hist, date_iso, course, race_no):
     q["_dt"]=pd.to_datetime(q["recorded_at"],errors="coerce")
     times=q.groupby("snapshot_id")["_dt"].max().sort_values()
     return str(times.index[-1]) if len(times) else ""
+
+def _snapshot_bet_plan(snap):
+    if snap is None or len(snap)==0 or "bet_plan_json" not in snap.columns:
+        return {}
+    for raw in snap["bet_plan_json"].tolist():
+        plan=plan_from_json(raw)
+        if plan:
+            return plan
+    return {}
+
+def _stored_bet_settlement(snap):
+    if snap is None or len(snap)==0:
+        return {}
+    r=snap.iloc[0]
+    status=str(r.get("bet_status","") or "")
+    if not status:
+        return {}
+    def n(key):
+        return pd.to_numeric(pd.Series([r.get(key)]),errors="coerce").iloc[0]
+    return {
+        "status":status,
+        "ticket_count":int(n("bet_ticket_count")) if pd.notna(n("bet_ticket_count")) else 0,
+        "hit_count":int(n("bet_hit_count")) if pd.notna(n("bet_hit_count")) else 0,
+        "stake":int(n("bet_stake")) if pd.notna(n("bet_stake")) else 0,
+        "payout":float(n("bet_payout")) if pd.notna(n("bet_payout")) else np.nan,
+        "profit":float(n("bet_profit")) if pd.notna(n("bet_profit")) else np.nan,
+        "roi":float(n("bet_roi")) if pd.notna(n("bet_roi")) else np.nan,
+    }
+
+def _apply_bet_settlement(hist,mask,payouts,now):
+    snap=hist.loc[mask].copy()
+    plan=_snapshot_bet_plan(snap)
+    settlement=settle_bet_plan(plan,payouts)
+    results_json=json.dumps(
+        settlement.get("results") or [],ensure_ascii=False,separators=(",",":")
+    )
+    for idx in hist.index[mask]:
+        hist.at[idx,"bet_stake"]=settlement.get("stake",np.nan)
+        hist.at[idx,"bet_payout"]=settlement.get("payout",np.nan)
+        hist.at[idx,"bet_profit"]=settlement.get("profit",np.nan)
+        hist.at[idx,"bet_roi"]=settlement.get("roi",np.nan)
+        hist.at[idx,"bet_hit_count"]=settlement.get("hit_count",0)
+        hist.at[idx,"bet_ticket_count"]=settlement.get("ticket_count",0)
+        hist.at[idx,"bet_status"]=settlement.get("status","")
+        hist.at[idx,"bet_ticket_results_json"]=results_json
+        hist.at[idx,"bet_settled_at"]=now
+    return settlement
+
+def _bet_answer_fields(snap,settlement=None):
+    plan=_snapshot_bet_plan(snap)
+    s=settlement or _stored_bet_settlement(snap)
+    def money(v):
+        x=pd.to_numeric(pd.Series([v]),errors="coerce").iloc[0]
+        return np.nan if pd.isna(x) else int(round(float(x)))
+    return {
+        "買い目":str(plan.get("買い目","") or "見送り"),
+        "100円購入額":money(s.get("stake",0)),
+        "払戻額":money(s.get("payout",np.nan)),
+        "収支":money(s.get("profit",np.nan)),
+        "買い目点数":int(s.get("ticket_count",0) or 0),
+        "馬券的中数":int(s.get("hit_count",0) or 0),
+        "買い目状態":str(s.get("status","") or ""),
+    }
 
 def _mark_answer_fields(snap, marks=("◎","○","▲")):
     """Return saved mark horses and their exact 1st/2nd/3rd result fields."""
@@ -810,11 +898,29 @@ def settle_day_snapshots(
             _apply_learning_labels(
                 sid,finish_map,str(snap.iloc[0].get("result_url","") or "")
             )
+            settlement=_stored_bet_settlement(snap)
+            plan=_snapshot_bet_plan(snap)
+            if plan and settlement.get("status") not in ("精算済み","買い目なし"):
+                try:
+                    result=fetch_race_result(
+                        date_iso,course,race_no,
+                        official_entry_urls=official_entry_urls,
+                        race_id_map=race_id_map,
+                    )
+                    settlement=_apply_bet_settlement(
+                        hist,mask,result.get("payouts") or {},now
+                    )
+                    changed=True
+                    snap=hist.loc[mask].copy()
+                except Exception:
+                    settlement=settle_bet_plan(plan,{})
             answer=_main_answer_fields(snap)
+            bet_answer=_bet_answer_fields(snap,settlement)
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合済み","照合頭数":int(actual.notna().sum()),
                 **answer,
+                **bet_answer,
                 "取得元":"保存済み",
                 "メッセージ":"着順を照合済みです。",
             })
@@ -872,11 +978,17 @@ def settle_day_snapshots(
             _apply_learning_labels(
                 sid,finish_map,result.get("result_url","")
             )
-            answer=_main_answer_fields(hist.loc[mask])
+            settlement=_apply_bet_settlement(
+                hist,mask,result.get("payouts") or {},now
+            )
+            snap_now=hist.loc[mask].copy()
+            answer=_main_answer_fields(snap_now)
+            bet_answer=_bet_answer_fields(snap_now,settlement)
             rows.append({
                 "競馬場":course,"レース":race_no,
                 "状態":"照合完了","照合頭数":final_matched,
                 **answer,
+                **bet_answer,
                 "取得元":result.get("source",""),
                 "メッセージ":"",
             })
@@ -937,6 +1049,20 @@ def settle_day_snapshots(
     second_hits=int((evaluated.get("◎2着",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     top3_hits=int((evaluated.get("◎3着内",pd.Series(dtype=object))=="的中").sum()) if len(evaluated) else 0
     evaluated_races=int(len(evaluated))
+    stake_series=pd.to_numeric(
+        evaluated.get("100円購入額",pd.Series(dtype=float)),errors="coerce"
+    )
+    payout_series=pd.to_numeric(
+        evaluated.get("払戻額",pd.Series(dtype=float)),errors="coerce"
+    )
+    profit_series=pd.to_numeric(
+        evaluated.get("収支",pd.Series(dtype=float)),errors="coerce"
+    )
+    settled_bets=(stake_series.fillna(0)>0) & payout_series.notna()
+    bet_stake_total=int(stake_series[settled_bets].sum()) if settled_bets.any() else 0
+    bet_payout_total=int(payout_series[settled_bets].sum()) if settled_bets.any() else 0
+    bet_profit_total=int(profit_series[settled_bets].sum()) if settled_bets.any() else 0
+    bet_settled_races=int(settled_bets.sum())
     mark_position_stats={}
     for mark in ("◎","○","▲"):
         stats={}
@@ -965,6 +1091,13 @@ def settle_day_snapshots(
         "main_second_rate":second_hits/evaluated_races if evaluated_races else np.nan,
         "main_top3_rate":top3_hits/evaluated_races if evaluated_races else np.nan,
         "mark_position_stats":mark_position_stats,
+        "bet_settled_races":bet_settled_races,
+        "bet_stake_total":bet_stake_total,
+        "bet_payout_total":bet_payout_total,
+        "bet_profit_total":bet_profit_total,
+        "bet_roi":(
+            bet_payout_total/bet_stake_total if bet_stake_total else np.nan
+        ),
         "save_mode":save_info.get("mode",getattr(backend,"mode","")),
         "saved_result_races":len(settled_sids),
         "save_verified":bool(not changed or settled_sids),

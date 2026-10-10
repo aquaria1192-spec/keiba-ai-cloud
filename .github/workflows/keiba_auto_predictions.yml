@@ -50,7 +50,7 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py entry_data_store.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py entry_data_store.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -74,7 +74,7 @@ jobs:
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 5
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 6
           assert entry_data_store.ENTRY_DATA_STORE_API_VERSION >= 2
           assert github_storage_config._token_format_issue(
               "github_pat_ここにFine-grained-token"
@@ -121,7 +121,7 @@ jobs:
           ).parameters
           evaluation_store.EVALUATION_STORE_API_VERSION=0
           evaluation_store=importlib.reload(evaluation_store)
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 5
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 6
           assert "learning_store" in inspect.signature(
               evaluation_store.save_course_batch_predictions
           ).parameters
@@ -329,7 +329,7 @@ jobs:
           assert "GitHub保存を診断" in app
           assert "invalid_token_format" in app
           assert "実際にGitHubで発行されたトークン" in app
-          assert 'EVALUATION_STORE_API_VERSION", 0) < 5' in app
+          assert 'EVALUATION_STORE_API_VERSION", 0) < 6' in app
           assert 'ENTRY_DATA_STORE_API_VERSION", 0) < 2' in app
           assert "token_source" in app
           assert "importlib.reload(_evaluation_store)" in app
@@ -345,39 +345,104 @@ jobs:
               "online_adapter=load_adapter_from_store(history_backend)"
           ) < app.index("if online_adapter is not None:")
 
-          # User-requested buy selections are back in the prediction UI,
-          # but ROI/payout accounting remains intentionally out of scope.
-          assert "#### 買い目" in app
+          # Odds-aware buy selections and 100-yen settlement are user-requested.
+          assert "#### オッズから選ぶ買い目" in app
           assert "recommended_bets" in app
-          assert "回収率" not in app
-          assert "race_bet_plan" not in app
-          assert "plan_to_json" not in app
+          assert "100円ずつ購入した場合の収支" in app
+          assert "回収率" in app
+          assert "plan_to_json" in app
 
           runner=Path("automation_runner.py").read_text(encoding="utf-8")
-          assert "race_bet_plan" not in runner
-          assert "apply_bet_settlement" not in runner
           assert "backfill_missing_bet_plans" not in runner
 
           store_src=Path("evaluation_store.py").read_text(encoding="utf-8")
-          assert "from betting_tools" not in store_src
-          assert "from payout_tools" not in store_src
-          assert "def race_roi_summary" not in store_src
-          assert "def apply_bet_settlement" not in store_src
-          assert not Path("betting_tools.py").exists()
-          assert not Path("payout_tools.py").exists()
+          assert "from betting_tools" in store_src
+          assert "_apply_bet_settlement" in store_src
+          assert Path("betting_tools.py").exists()
 
           from batch_predict import recommended_bets
+          from betting_tools import (
+              parse_market_odds_payload, parse_payouts_html,
+              settle_bet_plan, plan_to_json
+          )
+
+          odds_payload={
+              "status":"middle",
+              "data":{
+                  "official_datetime":"2026-10-11 10:00:00",
+                  "odds":{
+                      "4":{"0407":["8.0","0.0","1"],"0204":["12.0","0.0","2"]}
+                  },
+              },
+          }
+          parsed=parse_market_odds_payload(odds_payload,4)
+          assert parsed["odds"]["馬連"]["4-7"]["odds"]==8.0
+          assert parsed["odds"]["馬連"]["2-4"]["odds"]==12.0
+
           bet_sample=pd.DataFrame([
-              {"順位":1,"印":"◎","horse_no":4},
-              {"順位":2,"印":"○","horse_no":7},
-              {"順位":3,"印":"▲","horse_no":2},
+              {"順位":1,"印":"◎","horse_no":4,"win_prob":0.50,"top3_prob":0.85,"odds":3.0},
+              {"順位":2,"印":"○","horse_no":7,"win_prob":0.30,"top3_prob":0.70,"odds":5.0},
+              {"順位":3,"印":"▲","horse_no":2,"win_prob":0.20,"top3_prob":0.55,"odds":8.0},
           ])
-          plan=recommended_bets(bet_sample)
-          assert plan["単勝"]=="4"
-          assert plan["馬連"]=="4-7 / 4-2"
-          assert plan["ワイド"]=="4-7 / 4-2 / 7-2"
-          assert plan["三連複"]=="4-7-2"
-          assert plan["三連単"]=="4→7→2 / 4→2→7"
+          market={
+              "status":"middle","official_datetime":"2026-10-11 10:00:00",
+              "odds":{
+                  "単勝":{"4":{"odds":3.0},"7":{"odds":5.0},"2":{"odds":8.0}},
+                  "馬連":{"4-7":{"odds":8.0},"2-4":{"odds":15.0},"2-7":{"odds":20.0}},
+                  "ワイド":{
+                      "4-7":{"odds":4.0,"odds_low":4.0,"odds_high":5.0},
+                      "2-4":{"odds":6.0,"odds_low":6.0,"odds_high":8.0},
+                      "2-7":{"odds":8.0,"odds_low":8.0,"odds_high":10.0},
+                  },
+                  "三連複":{"2-4-7":{"odds":18.0}},
+                  "三連単":{
+                      "4→7→2":{"odds":40.0},
+                      "4→2→7":{"odds":50.0},
+                      "7→4→2":{"odds":60.0},
+                  },
+              },
+          }
+          plan=recommended_bets(
+              bet_sample,market_odds=market,race_id="202605040101"
+          )
+          assert plan["status"]=="買い"
+          assert plan["ticket_count"]>0
+          assert plan["stake_total"]==plan["ticket_count"]*100
+          assert all(int(t["stake"])==100 for t in plan["tickets"])
+          assert all(float(t["ev"])>0 for t in plan["tickets"])
+
+          payout_html="""
+          <table class="pay_table_01">
+            <tr><th class="tan">単勝</th><td>4</td><td class="txt_r">300</td><td class="txt_r">1</td></tr>
+            <tr><th class="uren">馬連</th><td>4-7</td><td class="txt_r">800</td><td class="txt_r">1</td></tr>
+          </table>
+          <table class="pay_table_01">
+            <tr><th class="wide">ワイド</th><td>4-7<br/>2-4<br/>2-7</td><td class="txt_r">400<br/>600<br/>800</td><td class="txt_r">1<br/>2<br/>3</td></tr>
+            <tr><th class="sanrenpuku">三連複</th><td>2-4-7</td><td class="txt_r">1800</td><td class="txt_r">1</td></tr>
+            <tr><th class="sanrentan">三連単</th><td>4→7→2</td><td class="txt_r">4000</td><td class="txt_r">1</td></tr>
+          </table>
+          """
+          payouts=parse_payouts_html(payout_html)
+          assert payouts["単勝"]["4"]==300
+          assert payouts["馬連"]["4-7"]==800
+          assert payouts["三連単"]["4→7→2"]==4000
+
+          settle_plan={
+              "stake_per_ticket":100,
+              "tickets":[
+                  {"bet_type":"単勝","combo":"4","stake":100},
+                  {"bet_type":"馬連","combo":"4-7","stake":100},
+                  {"bet_type":"三連単","combo":"4→7→2","stake":100},
+                  {"bet_type":"三連単","combo":"4→2→7","stake":100},
+              ],
+              "買い目":"test",
+          }
+          settled=settle_bet_plan(settle_plan,payouts)
+          assert settled["status"]=="精算済み"
+          assert settled["stake"]==400
+          assert settled["payout"]==5100
+          assert settled["profit"]==4700
+          assert settled["hit_count"]==3
 
           sample=pd.DataFrame([
               {"snapshot_id":"r1","recorded_at":"2026-09-27T10:00:00+09:00","date":"2026-09-27","course":"中山","race_no":"1R","horse_no":1,"horse_name":"A","mark":"◎","rank":1,"win_prob":0.45,"top3_prob":0.80,"actual_finish":1,"actual_win":1,"actual_top3":1,"snapshot_type":"course_batch"},
