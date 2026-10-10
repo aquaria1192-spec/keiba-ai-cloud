@@ -900,7 +900,7 @@ def settle_day_snapshots(
             )
             settlement=_stored_bet_settlement(snap)
             plan=_snapshot_bet_plan(snap)
-            if plan and not settlement:
+            if plan and settlement.get("status") not in ("精算済み","買い目なし"):
                 try:
                     result=fetch_race_result(
                         date_iso,course,race_no,
