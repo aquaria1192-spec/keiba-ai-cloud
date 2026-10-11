@@ -1,12 +1,12 @@
 {
-  "last_seen_race_count": 13,
+  "last_seen_race_count": 22,
   "last_status": "waiting",
-  "last_checked_at": "2026-10-11T04:53:58Z",
+  "last_checked_at": "2026-10-11T07:49:22Z",
   "latest": {
-    "checked_at": "2026-10-11T04:53:58Z",
+    "checked_at": "2026-10-11T07:49:22Z",
     "champion_version": "base-1.12-calibrated",
-    "total_settled_races": 13,
-    "new_races_since_last_evaluation": 13,
+    "total_settled_races": 22,
+    "new_races_since_last_evaluation": 22,
     "min_new_races": 200,
     "status": "waiting"
   }
