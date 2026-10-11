@@ -31,12 +31,12 @@
   },
   "official_entry_urls": {},
   "going_changed_rows": 0,
-  "body_weight_count": 0,
-  "odds_count": 68,
+  "body_weight_count": 195,
+  "odds_count": 197,
   "_saved_contexts": {
     "京都": {
       "course": "京都",
-      "race_date": "2026-10-10",
+      "race_date": "2026-10-11",
       "status_time": "",
       "jra_weather": "晴",
       "turf_going": "良",
@@ -49,7 +49,7 @@
       "used_course": "A コース（内柵を最内に設置） A 芝の状態 1週使用しましたが概ね良好な状態です。 芝の状態",
       "turf_state": "1週使用しましたが概ね良好な状態です。 芝コースの様子 撮影日：10月8日（木曜） /",
       "jra_baba_url": "https://www.jra.go.jp/keiba/baba/index2.html",
-      "is_target_date": false,
+      "is_target_date": true,
       "live_condition_ok": false,
       "public_condition_ok": false,
       "current_condition_ok": true,
@@ -58,14 +58,14 @@
       ],
       "weather": {
         "forecast_time": "2026-10-11T14:00",
-        "temperature_c": 28.5,
+        "temperature_c": 28.1,
         "precipitation_mm": 0.0,
         "rain_mm": 0.0,
         "precip_probability": 0.0,
-        "wind_kmh": 5.1,
-        "wind_gust_kmh": 19.8,
-        "weather_code": 1,
-        "weather_text": "晴",
+        "wind_kmh": 7.3,
+        "wind_gust_kmh": 18.4,
+        "weather_code": 0,
+        "weather_text": "快晴",
         "source": "Open-Meteo"
       },
       "turf_going_source": "取得出走表（当日）",
@@ -73,7 +73,7 @@
     },
     "東京": {
       "course": "東京",
-      "race_date": "2026-10-10",
+      "race_date": "2026-10-11",
       "status_time": "",
       "jra_weather": "晴",
       "turf_going": "良",
@@ -86,7 +86,7 @@
       "used_course": "A コース（内柵を最内に設置） A 芝の状態 1週使用しましたが、傷みは少なく概ね良好な状態です。 芝の状態",
       "turf_state": "1週使用しましたが、傷みは少なく概ね良好な状態です。 芝コースの様子 撮影日：10月8日（木曜） /",
       "jra_baba_url": "https://www.jra.go.jp/keiba/baba/",
-      "is_target_date": false,
+      "is_target_date": true,
       "live_condition_ok": false,
       "public_condition_ok": false,
       "current_condition_ok": true,
@@ -95,12 +95,12 @@
       ],
       "weather": {
         "forecast_time": "2026-10-11T14:00",
-        "temperature_c": 25.7,
+        "temperature_c": 25.6,
         "precipitation_mm": 0.0,
         "rain_mm": 0.0,
         "precip_probability": 0.0,
-        "wind_kmh": 6.7,
-        "wind_gust_kmh": 29.5,
+        "wind_kmh": 7.0,
+        "wind_gust_kmh": 27.4,
         "weather_code": 0,
         "weather_text": "快晴",
         "source": "Open-Meteo"
@@ -109,7 +109,7 @@
       "dirt_going_source": "取得出走表（当日）"
     }
   },
-  "saved_at": "2026-10-11T07:40:22+09:00",
+  "saved_at": "2026-10-11T12:46:48+09:00",
   "saved_rows": 335,
   "saved_races": 23
 }
