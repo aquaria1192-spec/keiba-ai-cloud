@@ -31,8 +31,8 @@
   },
   "official_entry_urls": {},
   "going_changed_rows": 0,
-  "body_weight_count": 195,
-  "odds_count": 197,
+  "body_weight_count": 257,
+  "odds_count": 272,
   "_saved_contexts": {
     "京都": {
       "course": "京都",
@@ -109,7 +109,7 @@
       "dirt_going_source": "取得出走表（当日）"
     }
   },
-  "saved_at": "2026-10-11T12:46:48+09:00",
+  "saved_at": "2026-10-11T13:51:27+09:00",
   "saved_rows": 335,
   "saved_races": 23
 }
