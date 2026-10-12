@@ -54,7 +54,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.14",
+    page_title="競馬予想AI Cloud Ver.1.15",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -268,7 +268,11 @@ def show_prediction(detail, context, bias):
                 "現在オッズ":t.get("odds",np.nan),
                 "AI的中推定":t.get("probability",np.nan),
                 "期待値":t.get("ev",np.nan),
-                "購入額":f"{int(t.get('stake',100) or 100)}円",
+                "購入額":(
+                    "候補のみ"
+                    if int(t.get("stake",0) or 0)==0
+                    else f"{int(t.get('stake',0))}円"
+                ),
             })
         bq=pd.DataFrame(bet_rows)
         if "AI的中推定" in bq:
@@ -279,14 +283,28 @@ def show_prediction(detail, context, bias):
             if col in bq:
                 bq[col]=pd.to_numeric(bq[col],errors="coerce").round(2)
         st.dataframe(bq,use_container_width=True,hide_index=True)
-        st.write(
-            f"**{len(tickets)}点 × 100円 = "
-            f"{int(bet_plan.get('stake_total',len(tickets)*100)):,}円**"
-        )
-        st.caption(
-            "AI推定確率と現在オッズから期待値を計算し、基準を超えた組合せだけを表示します。"
-            " ワイドは表示オッズの下限で期待値を計算します。"
-        )
+        stake_total=int(bet_plan.get("stake_total",0) or 0)
+        status=str(bet_plan.get("status","") or "")
+        if stake_total>0:
+            st.write(
+                f"**{len(tickets)}点 × 100円 = {stake_total:,}円**"
+            )
+        else:
+            st.write("**オッズ取得待ちのため購入額には計上しません。**")
+        if status=="参考買い":
+            st.warning(
+                "期待値基準を超える券がなかったため、現在オッズで最も条件のよい候補を参考表示しています。"
+            )
+        elif status=="オッズ待ち候補":
+            st.info(
+                "組合せオッズを取得できなかったため、AI1位馬を暫定候補として表示しています。"
+                " この候補は100円収支には計上しません。"
+            )
+        else:
+            st.caption(
+                "AI推定確率と現在オッズから期待値を計算し、基準を超えた組合せを表示します。"
+                " ワイドは表示オッズの下限で期待値を計算します。"
+            )
     else:
         st.info(str(bet_plan.get("reason") or "オッズ上の妙味がないため、このレースは見送りです。"))
 
@@ -318,9 +336,9 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.14")
+st.title("🏇 競馬予想AI Cloud Ver.1.15")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
-st.caption("開催地ごと全レース一括予想＋オッズ期待値買い目＋100円収支＋◎○▲の1～3着率集計")
+st.caption("開催地・レースはクリック選択のみ＋オッズ買い目を常時表示＋100円収支＋◎○▲の1～3着率集計")
 st.markdown("""
 <div class="hero">
 <b>予想 → 結果照合 → 自己評価を自動でつなげます。</b><br>
@@ -570,10 +588,11 @@ with st.container(border=True):
             st.warning("開催地データがありません。最新データを更新してください。")
             st.stop()
 
-        course=st.selectbox(
+        course=st.radio(
             "① 開催地を選択",
             courses,
-            key="cloud_course"
+            horizontal=True,
+            key="cloud_course_choice"
         )
         cdf=day[day["course"]==course].copy()
         races=sorted(
@@ -727,7 +746,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.14",
+                                "1.15",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -815,11 +834,12 @@ with st.container(border=True):
                 " AI予想そのものは開催地選択時に全レース計算済みです。"
             )
 
-            race=st.selectbox(
+            race=st.radio(
                 "② 詳細を見るレース",
                 races,
                 format_func=lambda x: race_label(x,cdf),
-                key="cloud_race"
+                horizontal=True,
+                key="cloud_race_choice"
             )
 
             # 選択レースの詳細だけを下に表示する。
@@ -1178,7 +1198,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.14の自動学習について"):
+with st.expander("Ver.1.15の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
