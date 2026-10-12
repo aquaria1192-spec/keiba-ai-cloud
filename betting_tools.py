@@ -130,7 +130,7 @@ def parse_market_odds_payload(payload: dict, requested_type: int):
 def fetch_market_odds(race_id: str, session=None, timeout=10):
     """Fetch live/final odds with two URL variants and merge available data."""
     race_id = str(race_id or "").strip()
-    if not re.fullmatch(r"\\d{12}", race_id):
+    if not re.fullmatch(r"\d{12}", race_id):
         return {
             "race_id": race_id,
             "status": "invalid_race_id",
