@@ -1,6 +1,9 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
+  push:
+    branches:
+      - feature/v118-recent-trend-win-model
   workflow_dispatch:
     inputs:
       mode:
@@ -72,7 +75,21 @@ jobs:
           import importlib
           import os
           import github_storage_config
+          import joblib
           import ltr_challenger
+
+          pkg=joblib.load("data/cloud_model.joblib")
+          store=joblib.load("data/cloud_feature_store.joblib")
+          print("MODEL_KEYS",sorted(pkg.keys()))
+          print("MODEL_META",pkg.get("metadata"))
+          print("MODEL_WEIGHTS",pkg.get("weights"))
+          print("TRAINED_MODEL_KEYS",sorted((pkg.get("trained_models") or {}).keys()))
+          print("STORE_KEYS",sorted(store.keys()))
+          for _k in ["latest","recent"]:
+              _v=store.get(_k)
+              if hasattr(_v,"columns"):
+                  print("STORE_TABLE",_k,_v.shape,list(_v.columns))
+          print("STORE_GLOBAL",store.get("global"))
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
