@@ -26,7 +26,7 @@ BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
-EVALUATION_STORE_API_VERSION = 6
+EVALUATION_STORE_API_VERSION = 7
 
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
@@ -70,6 +70,9 @@ COLS = [
     "date","course","race_no","race_name","surface","distance","going",
     "horse_no","horse_name","mark","rank",
     "win_prob","top3_prob","base_ai_index","day_adjustment","ai_index",
+    "ranking_score","ranking_adjustment","ranking_consensus",
+    "ranking_layer_version","ranking_changed_top",
+    "confidence_score","confidence_label","confidence_gap","confidence_entropy","confidence_reason",
     "odds","popularity","body_weight","body_weight_diff",
     "snapshot_type","post_time","minutes_before_post","auto_generated",
     "bet_style","bet_budget","bet_plan_json",
@@ -89,6 +92,7 @@ def norm_history(df):
     text_cols=[
         "snapshot_id","recorded_at","app_version","date","course","race_no",
         "race_name","surface","going","horse_name","mark","snapshot_type","post_time",
+        "ranking_layer_version","confidence_label","confidence_reason",
         "bet_style","bet_plan_json","bet_status","bet_ticket_results_json","bet_settled_at",
         "settled_at","result_url",
     ]
@@ -264,6 +268,8 @@ def prediction_snapshot(detail,app_version="1.11"):
             str(r.get("horse_no","")),str(r.get("horse_name","")),
             str(r.get("印","")),numtext(r.get("win_prob")),
             numtext(r.get("top3_prob")),numtext(r.get("ai_index")),
+            numtext(r.get("ranking_score")),
+            str(r.get("confidence_label","")),
             numtext(r.get("odds")),numtext(r.get("body_weight")),
             str(r.get("going","")),
             str(r.get("snapshot_type","manual")),
@@ -286,6 +292,16 @@ def prediction_snapshot(detail,app_version="1.11"):
             "top3_prob":r.get("top3_prob",np.nan),
             "base_ai_index":r.get("基礎AI指数",r.get("ai_index",np.nan)),
             "day_adjustment":r.get("当日補正",0.0),"ai_index":r.get("ai_index",np.nan),
+            "ranking_score":r.get("ranking_score",np.nan),
+            "ranking_adjustment":r.get("ranking_adjustment",np.nan),
+            "ranking_consensus":r.get("ranking_consensus",np.nan),
+            "ranking_layer_version":r.get("ranking_layer_version",""),
+            "ranking_changed_top":r.get("ranking_changed_top",False),
+            "confidence_score":r.get("confidence_score",np.nan),
+            "confidence_label":r.get("confidence_label",""),
+            "confidence_gap":r.get("confidence_gap",np.nan),
+            "confidence_entropy":r.get("confidence_entropy",np.nan),
+            "confidence_reason":r.get("confidence_reason",""),
             "odds":r.get("odds",np.nan),"popularity":r.get("popularity",np.nan),
             "body_weight":r.get("body_weight",np.nan),
             "body_weight_diff":r.get("body_weight_diff",np.nan),

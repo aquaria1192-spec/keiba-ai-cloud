@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from model_compare import ensemble_predict
 from betting_tools import build_value_bet_plan
+from ranking_layer import apply_race_ranking_layer
 
 def mark_for_rank(rank, field_size):
     """
@@ -43,6 +44,18 @@ def mark_label(mark):
 
 def mark_legend():
     return "◎本命　○対抗　▲単穴　△連下　☆穴　注注意　×低評価"
+
+
+def rerank_prediction(detail):
+    """Apply the race-level ranking layer and then regenerate rank/marks."""
+    d=apply_race_ranking_layer(detail)
+    if d is None or len(d)==0:
+        return d
+    d=d.copy()
+    d["順位"]=range(1,len(d)+1)
+    d["印"]=[mark_for_rank(r,len(d)) for r in d["順位"]]
+    d["評価"]=d["印"].map(mark_label)
+    return d
 
 
 def recommended_bets(
@@ -89,9 +102,7 @@ def batch_predict_day(entries_features, date_value, trained_models, weights):
     group_cols = ["course","race_no"]
     for (course,race_no), g in target.groupby(group_cols, sort=False):
         p = ensemble_predict(g, trained_models, weights).copy()
-        p["順位"] = range(1, len(p)+1)
-        p["印"] = [mark_for_rank(r, len(p)) for r in p["順位"]]
-        p["評価"] = p["印"].map(mark_label)
+        p = rerank_prediction(p)
 
         first = g.iloc[0]
         label = race_display(first)

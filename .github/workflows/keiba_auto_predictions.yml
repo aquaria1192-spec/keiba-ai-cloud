@@ -50,10 +50,11 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py entry_data_store.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py ranking_layer.py entry_data_store.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
+          import numpy as np
           from race_day_context import _race_no_int_safe
           from model_compare import _calibrate_histgb_probabilities
           from auto_data_builder import (
@@ -74,7 +75,7 @@ jobs:
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 6
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 7
           assert entry_data_store.ENTRY_DATA_STORE_API_VERSION >= 2
           assert github_storage_config._token_format_issue(
               "github_pat_ここにFine-grained-token"
@@ -121,7 +122,7 @@ jobs:
           ).parameters
           evaluation_store.EVALUATION_STORE_API_VERSION=0
           evaluation_store=importlib.reload(evaluation_store)
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 6
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 7
           assert "learning_store" in inspect.signature(
               evaluation_store.save_course_batch_predictions
           ).parameters
@@ -329,7 +330,7 @@ jobs:
           assert "GitHub保存を診断" in app
           assert "invalid_token_format" in app
           assert "実際にGitHubで発行されたトークン" in app
-          assert 'EVALUATION_STORE_API_VERSION", 0) < 6' in app
+          assert 'EVALUATION_STORE_API_VERSION", 0) < 7' in app
           assert 'ENTRY_DATA_STORE_API_VERSION", 0) < 2' in app
           assert "token_source" in app
           assert "importlib.reload(_evaluation_store)" in app
@@ -351,20 +352,29 @@ jobs:
           assert "course=st.radio(" in app
           assert "race=st.radio(" in app
           assert "st.selectbox(" not in app
-          assert "Ver.1.15" in app
+          assert "Ver.1.16" in app
           assert "100円ずつ購入した場合の収支" in app
           assert "回収率" in app
+          assert "AI信頼度" in app
+          assert "ranking_score" in app
+          assert "rerank_prediction(rd)" in app
           assert "plan_to_json" in app
 
           runner=Path("automation_runner.py").read_text(encoding="utf-8")
+          assert "rerank_prediction(detail)" in runner
+          assert 'app_version="1.16"' in runner
           assert "backfill_missing_bet_plans" not in runner
 
           store_src=Path("evaluation_store.py").read_text(encoding="utf-8")
           assert "from betting_tools" in store_src
           assert "_apply_bet_settlement" in store_src
           assert Path("betting_tools.py").exists()
+          assert "ranking_score" in store_src
+          assert "confidence_label" in store_src
+          assert Path("ranking_layer.py").exists()
 
-          from batch_predict import recommended_bets
+          from batch_predict import recommended_bets, rerank_prediction
+          from ranking_layer import apply_race_ranking_layer, RANKING_LAYER_VERSION
           from betting_tools import (
               parse_market_odds_payload, parse_payouts_html,
               settle_bet_plan, plan_to_json
@@ -445,6 +455,55 @@ jobs:
           provisional_settlement=settle_bet_plan(provisional,{})
           assert provisional_settlement["status"]=="オッズ未取得・未購入"
           assert provisional_settlement["stake"]==0
+
+
+          # Ver.1.16 race-ranking layer: decisive win-prob gaps remain intact.
+          strong=pd.DataFrame([
+              {"horse_no":1,"horse_name":"A","win_prob":0.40,"top3_prob":0.72,"ai_index":95,
+               "recent_top3_rate_rank_pct":0.20,"jockey_top3_rate_rank_pct":0.20,
+               "trainer_top3_rate_rank_pct":0.20,"distance_top3_rate_rank_pct":0.20,
+               "course_top3_rate_rank_pct":0.20,"surface_top3_rate_rank_pct":0.20},
+              {"horse_no":2,"horse_name":"B","win_prob":0.20,"top3_prob":0.80,"ai_index":90,
+               "recent_top3_rate_rank_pct":0.10,"jockey_top3_rate_rank_pct":0.10,
+               "trainer_top3_rate_rank_pct":0.10,"distance_top3_rate_rank_pct":0.10,
+               "course_top3_rate_rank_pct":0.10,"surface_top3_rate_rank_pct":0.10},
+              {"horse_no":3,"horse_name":"C","win_prob":0.10,"top3_prob":0.40,"ai_index":60,
+               "recent_top3_rate_rank_pct":0.80,"jockey_top3_rate_rank_pct":0.80,
+               "trainer_top3_rate_rank_pct":0.80,"distance_top3_rate_rank_pct":0.80,
+               "course_top3_rate_rank_pct":0.80,"surface_top3_rate_rank_pct":0.80},
+          ])
+          strong_ranked=rerank_prediction(strong)
+          assert int(strong_ranked.iloc[0]["horse_no"])==1
+          assert strong_ranked.iloc[0]["印"]=="◎"
+          assert strong_ranked.iloc[0]["confidence_label"] in {"S","A","B","C","D"}
+          assert strong_ranked.iloc[0]["ranking_layer_version"]==RANKING_LAYER_VERSION
+
+          # Close contenders can be reordered by non-market race consensus.
+          close=pd.DataFrame([
+              {"horse_no":1,"horse_name":"A","win_prob":0.250,"top3_prob":0.50,"ai_index":80,
+               "recent_top3_rate_rank_pct":0.90,"jockey_top3_rate_rank_pct":0.90,
+               "trainer_top3_rate_rank_pct":0.90,"distance_top3_rate_rank_pct":0.90,
+               "course_top3_rate_rank_pct":0.90,"surface_top3_rate_rank_pct":0.90},
+              {"horse_no":2,"horse_name":"B","win_prob":0.245,"top3_prob":0.78,"ai_index":82,
+               "recent_top3_rate_rank_pct":0.10,"jockey_top3_rate_rank_pct":0.10,
+               "trainer_top3_rate_rank_pct":0.10,"distance_top3_rate_rank_pct":0.10,
+               "course_top3_rate_rank_pct":0.10,"surface_top3_rate_rank_pct":0.10},
+              {"horse_no":3,"horse_name":"C","win_prob":0.15,"top3_prob":0.40,"ai_index":60,
+               "recent_top3_rate_rank_pct":0.60,"jockey_top3_rate_rank_pct":0.60,
+               "trainer_top3_rate_rank_pct":0.60,"distance_top3_rate_rank_pct":0.60,
+               "course_top3_rate_rank_pct":0.60,"surface_top3_rate_rank_pct":0.60},
+          ])
+          close_ranked=rerank_prediction(close)
+          assert int(close_ranked.iloc[0]["horse_no"])==2
+          assert bool(close_ranked.iloc[0]["ranking_changed_top"])
+
+          # Current odds are not a direct input to the final ranking layer.
+          close_odds_a=close.copy(); close_odds_a["odds"]=[2.0,20.0,50.0]
+          close_odds_b=close.copy(); close_odds_b["odds"]=[50.0,2.0,20.0]
+          ra=apply_race_ranking_layer(close_odds_a)
+          rb=apply_race_ranking_layer(close_odds_b)
+          assert list(ra["horse_no"])==list(rb["horse_no"])
+          assert np.allclose(ra["ranking_score"],rb["ranking_score"],equal_nan=True)
 
           payout_html="""
           <table class="pay_table_01">
