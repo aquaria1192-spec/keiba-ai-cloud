@@ -686,7 +686,7 @@ with st.container(border=True):
                             race_id=str(race_id or ""),
                             stake_per_ticket=100,
                         )
-                        rd["bet_style"]="odds_value_v1"
+                        rd["bet_style"]="odds_value_v2"
                         rd["bet_budget"]=int(bet_plan.get("stake_total",0) or 0)
                         rd["bet_plan_json"]=plan_to_json(bet_plan)
 
