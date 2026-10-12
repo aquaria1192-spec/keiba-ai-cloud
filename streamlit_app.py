@@ -25,7 +25,7 @@ from race_day_context import (
 # signature. Version-check + reload prevents mixed-version calls such as
 # "unexpected keyword argument 'learning_store'".
 import evaluation_store as _evaluation_store
-if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 6:
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 7:
     _evaluation_store = importlib.reload(_evaluation_store)
 
 HistoryBackend = _evaluation_store.HistoryBackend
