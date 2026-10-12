@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - feature/v117-ltr-shadow-challenger
   workflow_dispatch:
     inputs:
       mode:
