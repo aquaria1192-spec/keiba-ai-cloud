@@ -350,9 +350,9 @@ def build_value_bet_plan(
             prob = float(top["_strength"])
             empty.update({
                 "version": "odds-value-v2",
-                "status": "暫定",
+                "status": "オッズ待ち候補",
                 "ticket_count": 1,
-                "stake_total": int(stake_per_ticket),
+                "stake_total": 0,
                 "tickets": [{
                     "bet_type": "単勝",
                     "combo": str(no),
@@ -360,7 +360,7 @@ def build_value_bet_plan(
                     "odds": np.nan,
                     "odds_high": np.nan,
                     "ev": np.nan,
-                    "stake": int(stake_per_ticket),
+                    "stake": 0,
                     "reason": "オッズ取得待ちのためAI1位馬を暫定表示",
                     "provisional": True,
                 }],
@@ -529,6 +529,17 @@ def parse_payouts_html(html: str):
 def settle_bet_plan(plan: dict | str, payouts: dict | None):
     plan = plan_from_json(plan)
     tickets = list(plan.get("tickets") or [])
+    if str(plan.get("status","")) == "オッズ待ち候補":
+        return {
+            "status": "オッズ未取得・未購入",
+            "ticket_count": 0,
+            "hit_count": 0,
+            "stake": 0,
+            "payout": 0,
+            "profit": 0,
+            "roi": np.nan,
+            "results": [],
+        }
     stake_per_ticket = int(plan.get("stake_per_ticket") or 100)
     total_stake = int(sum(int(t.get("stake") or stake_per_ticket) for t in tickets))
     if not tickets:
