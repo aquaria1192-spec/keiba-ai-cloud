@@ -1,9 +1,6 @@
 name: Keiba AI automatic pre-race predictions
 
 on:
-  push:
-    branches:
-      - feature/v118-recent-trend-win-model
   workflow_dispatch:
     inputs:
       mode:
