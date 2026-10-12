@@ -57,6 +57,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
+          import numpy as np
           from race_day_context import _race_no_int_safe
           from model_compare import _calibrate_histgb_probabilities
           from auto_data_builder import (
