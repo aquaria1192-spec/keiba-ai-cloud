@@ -857,7 +857,7 @@ with st.container(border=True):
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
                         ).map(pct)
-                for c in ["AI指数","信頼度点","単勝オッズ","AI上位差"]:
+                for c in ["AI指数","信頼度点","トレンド点","単勝オッズ","AI上位差"]:
                     if c in sq:
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
