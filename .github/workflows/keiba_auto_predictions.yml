@@ -348,6 +348,10 @@ jobs:
           # Odds-aware buy selections and 100-yen settlement are user-requested.
           assert "#### オッズから選ぶ買い目" in app
           assert "recommended_bets" in app
+          assert "course=st.radio(" in app
+          assert "race=st.radio(" in app
+          assert "st.selectbox(" not in app
+          assert "Ver.1.15" in app
           assert "100円ずつ購入した場合の収支" in app
           assert "回収率" in app
           assert "plan_to_json" in app
@@ -405,11 +409,42 @@ jobs:
           plan=recommended_bets(
               bet_sample,market_odds=market,race_id="202605040101"
           )
-          assert plan["status"]=="買い"
+          assert plan["status"]=="本買い"
           assert plan["ticket_count"]>0
           assert plan["stake_total"]==plan["ticket_count"]*100
           assert all(int(t["stake"])==100 for t in plan["tickets"])
           assert all(float(t["ev"])>0 for t in plan["tickets"])
+
+          low_market={
+              "status":"middle",
+              "odds":{
+                  "単勝":{
+                      "4":{"odds":1.2},
+                      "7":{"odds":1.3},
+                      "2":{"odds":1.4},
+                  }
+              },
+          }
+          fallback_plan=recommended_bets(
+              bet_sample,market_odds=low_market,race_id="202605040101"
+          )
+          assert fallback_plan["status"]=="参考買い"
+          assert fallback_plan["ticket_count"]>=1
+          assert fallback_plan["stake_total"]==fallback_plan["ticket_count"]*100
+          assert fallback_plan["買い目"]!="見送り"
+
+          no_odds_sample=bet_sample.copy()
+          no_odds_sample["odds"]=float("nan")
+          provisional=recommended_bets(
+              no_odds_sample,market_odds={},race_id="202605040101"
+          )
+          assert provisional["status"]=="オッズ待ち候補"
+          assert provisional["ticket_count"]==1
+          assert provisional["stake_total"]==0
+          assert provisional["買い目"].startswith("単勝 ")
+          provisional_settlement=settle_bet_plan(provisional,{})
+          assert provisional_settlement["status"]=="オッズ未取得・未購入"
+          assert provisional_settlement["stake"]==0
 
           payout_html="""
           <table class="pay_table_01">

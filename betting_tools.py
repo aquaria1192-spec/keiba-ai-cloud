@@ -128,7 +128,7 @@ def parse_market_odds_payload(payload: dict, requested_type: int):
 
 
 def fetch_market_odds(race_id: str, session=None, timeout=10):
-    """Fetch live/final odds for ticket types used by the recommendation UI."""
+    """Fetch live/final odds with two URL variants and merge available data."""
     race_id = str(race_id or "").strip()
     if not re.fullmatch(r"\d{12}", race_id):
         return {
@@ -144,22 +144,32 @@ def fetch_market_odds(race_id: str, session=None, timeout=10):
     official_times = []
     errors = []
     for type_code in (1, 4, 5, 7, 8):
-        url = (
-            "https://race.netkeiba.com/api/api_get_jra_odds.html"
-            f"?race_id={race_id}&type={type_code}&action=update"
-        )
-        try:
-            r = s.get(url, timeout=timeout)
-            r.raise_for_status()
-            parsed = parse_market_odds_payload(r.json(), type_code)
-            if parsed["status"]:
-                statuses.append(parsed["status"])
-            if parsed["official_datetime"]:
-                official_times.append(parsed["official_datetime"])
-            for bet_type, combos in parsed["odds"].items():
-                merged.setdefault(bet_type, {}).update(combos)
-        except Exception as exc:
-            errors.append(f"type={type_code}: {exc}")
+        loaded = False
+        for suffix in ("&action=update", ""):
+            url = (
+                "https://race.netkeiba.com/api/api_get_jra_odds.html"
+                f"?race_id={race_id}&type={type_code}{suffix}"
+            )
+            try:
+                r = s.get(url, timeout=timeout)
+                r.raise_for_status()
+                parsed = parse_market_odds_payload(r.json(), type_code)
+                if parsed["status"]:
+                    statuses.append(parsed["status"])
+                if parsed["official_datetime"]:
+                    official_times.append(parsed["official_datetime"])
+                loaded_here = False
+                for bet_type, combos in parsed["odds"].items():
+                    if combos:
+                        merged.setdefault(bet_type, {}).update(combos)
+                        loaded_here = True
+                if loaded_here:
+                    loaded = True
+                    break
+            except Exception as exc:
+                errors.append(f"type={type_code}: {exc}")
+        if not loaded:
+            errors.append(f"type={type_code}: オッズ未取得")
     status = "result" if "result" in statuses and "middle" not in statuses else (
         "middle" if "middle" in statuses else (statuses[0] if statuses else "")
     )
@@ -170,7 +180,6 @@ def fetch_market_odds(race_id: str, session=None, timeout=10):
         "odds": merged,
         "errors": errors,
     }
-
 
 def _ranked_horses(detail: pd.DataFrame):
     d = detail.copy()
@@ -317,7 +326,7 @@ def build_value_bet_plan(
     published odds edge so its expected value is conservative.
     """
     empty = {
-        "version": "odds-value-v1",
+        "version": "odds-value-v2",
         "race_id": str(race_id or ""),
         "status": "見送り",
         "stake_per_ticket": int(stake_per_ticket),
@@ -334,9 +343,33 @@ def build_value_bet_plan(
 
     rows = _ticket_candidates(detail, market_odds)
     if not rows:
-        empty["reason"] = "買い目用オッズを取得できませんでした。"
+        d = _ranked_horses(detail)
+        if len(d):
+            top = d.iloc[0]
+            no = int(top["_horse_no"])
+            prob = float(top["_strength"])
+            empty.update({
+                "version": "odds-value-v2",
+                "status": "オッズ待ち候補",
+                "ticket_count": 1,
+                "stake_total": 0,
+                "tickets": [{
+                    "bet_type": "単勝",
+                    "combo": str(no),
+                    "probability": prob,
+                    "odds": np.nan,
+                    "odds_high": np.nan,
+                    "ev": np.nan,
+                    "stake": 0,
+                    "reason": "オッズ取得待ちのためAI1位馬を暫定表示",
+                    "provisional": True,
+                }],
+                "買い目": f"単勝 {no}",
+                "reason": "オッズ取得待ちのため、AI1位馬の単勝を暫定表示しています。",
+            })
+        else:
+            empty["reason"] = "買い目用データを取得できませんでした。"
         return empty
-
     # Slightly stricter thresholds for high-variance exotic tickets.
     thresholds = {
         "単勝": max(float(min_ev), 1.03),
@@ -356,14 +389,24 @@ def build_value_bet_plan(
     chosen.sort(key=lambda x: (x["ev"], x["probability"]), reverse=True)
     chosen = chosen[: int(max_tickets)]
 
+    fallback_used = False
     if not chosen:
-        best = max(rows, key=lambda x: x["ev"])
-        empty["reason"] = (
-            "AI確率と現在オッズから期待値1.0超の候補がないため見送り。"
-            f" 最高候補は{best['bet_type']} {best['combo']} / 期待値{best['ev']:.2f}"
+        fallback_used = True
+        pool = sorted(
+            rows,
+            key=lambda x: (x["ev"], x["probability"]),
+            reverse=True,
         )
-        empty["best_candidate"] = best
-        return empty
+        chosen = []
+        seen_types = set()
+        for x in pool:
+            if not chosen or x["bet_type"] not in seen_types:
+                chosen.append(x)
+                seen_types.add(x["bet_type"])
+            if len(chosen) >= 3:
+                break
+        if not chosen and pool:
+            chosen = [pool[0]]
 
     tickets = []
     for x in chosen:
@@ -381,9 +424,9 @@ def build_value_bet_plan(
         if combos:
             by_type.append(f"{bet_type} " + " / ".join(combos))
     return {
-        "version": "odds-value-v1",
+        "version": "odds-value-v2",
         "race_id": str(race_id or ""),
-        "status": "買い",
+        "status": "参考買い" if fallback_used else "本買い",
         "stake_per_ticket": int(stake_per_ticket),
         "ticket_count": int(len(tickets)),
         "stake_total": int(len(tickets) * int(stake_per_ticket)),
@@ -392,6 +435,12 @@ def build_value_bet_plan(
         "official_datetime": str((market_odds or {}).get("official_datetime", "") or ""),
         "tickets": tickets,
         "買い目": "｜".join(by_type) if by_type else "見送り",
+        "fallback_used": bool(fallback_used),
+        "reason": (
+            "厳格な期待値基準を超える券がないため、現在オッズで最も条件のよい候補を参考表示しています。"
+            if fallback_used else
+            "AI確率と現在オッズから期待値基準を超えた候補です。"
+        ),
     }
 
 
@@ -480,6 +529,17 @@ def parse_payouts_html(html: str):
 def settle_bet_plan(plan: dict | str, payouts: dict | None):
     plan = plan_from_json(plan)
     tickets = list(plan.get("tickets") or [])
+    if str(plan.get("status","")) == "オッズ待ち候補":
+        return {
+            "status": "オッズ未取得・未購入",
+            "ticket_count": 0,
+            "hit_count": 0,
+            "stake": 0,
+            "payout": 0,
+            "profit": 0,
+            "roi": np.nan,
+            "results": [],
+        }
     stake_per_ticket = int(plan.get("stake_per_ticket") or 100)
     total_stake = int(sum(int(t.get("stake") or stake_per_ticket) for t in tickets))
     if not tickets:
