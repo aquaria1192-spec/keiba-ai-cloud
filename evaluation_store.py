@@ -26,7 +26,7 @@ BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 LOCAL_HISTORY = DATA_DIR / "prediction_history.csv"
 JST = ZoneInfo("Asia/Tokyo")
-EVALUATION_STORE_API_VERSION = 7
+EVALUATION_STORE_API_VERSION = 8
 
 DEFAULT_AUTO_HISTORY_REPO = "aquaria1192-spec/keiba-ai-cloud"
 DEFAULT_AUTO_HISTORY_BRANCH = "prediction-history"
@@ -73,6 +73,8 @@ COLS = [
     "ranking_score","ranking_adjustment","ranking_consensus",
     "ranking_layer_version","ranking_changed_top",
     "confidence_score","confidence_label","confidence_gap","confidence_entropy","confidence_reason",
+    "trend_score","trend_label","trend_finish_momentum","trend_margin_momentum",
+    "trend_last3f_momentum","trend_layer_version","trend_promoted","trend_reason",
     "odds","popularity","body_weight","body_weight_diff",
     "snapshot_type","post_time","minutes_before_post","auto_generated",
     "bet_style","bet_budget","bet_plan_json",
@@ -93,6 +95,7 @@ def norm_history(df):
         "snapshot_id","recorded_at","app_version","date","course","race_no",
         "race_name","surface","going","horse_name","mark","snapshot_type","post_time",
         "ranking_layer_version","confidence_label","confidence_reason",
+        "trend_label","trend_layer_version","trend_reason",
         "bet_style","bet_plan_json","bet_status","bet_ticket_results_json","bet_settled_at",
         "settled_at","result_url",
     ]
@@ -270,6 +273,8 @@ def prediction_snapshot(detail,app_version="1.11"):
             numtext(r.get("top3_prob")),numtext(r.get("ai_index")),
             numtext(r.get("ranking_score")),
             str(r.get("confidence_label","")),
+            str(r.get("trend_label","")),
+            numtext(r.get("trend_score")),
             numtext(r.get("odds")),numtext(r.get("body_weight")),
             str(r.get("going","")),
             str(r.get("snapshot_type","manual")),
@@ -302,6 +307,14 @@ def prediction_snapshot(detail,app_version="1.11"):
             "confidence_gap":r.get("confidence_gap",np.nan),
             "confidence_entropy":r.get("confidence_entropy",np.nan),
             "confidence_reason":r.get("confidence_reason",""),
+            "trend_score":r.get("trend_score",np.nan),
+            "trend_label":r.get("trend_label",""),
+            "trend_finish_momentum":r.get("trend_finish_momentum",np.nan),
+            "trend_margin_momentum":r.get("trend_margin_momentum",np.nan),
+            "trend_last3f_momentum":r.get("trend_last3f_momentum",np.nan),
+            "trend_layer_version":r.get("trend_layer_version",""),
+            "trend_promoted":r.get("trend_promoted",False),
+            "trend_reason":r.get("trend_reason",""),
             "odds":r.get("odds",np.nan),"popularity":r.get("popularity",np.nan),
             "body_weight":r.get("body_weight",np.nan),
             "body_weight_diff":r.get("body_weight_diff",np.nan),
