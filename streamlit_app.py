@@ -12,7 +12,7 @@ import streamlit as st
 
 from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
-from batch_predict import batch_predict_day, mark_legend, recommended_bets
+from batch_predict import batch_predict_day, mark_legend, recommended_bets, rerank_prediction
 from betting_tools import fetch_market_odds, plan_from_json, plan_to_json
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
@@ -54,7 +54,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.15",
+    page_title="競馬予想AI Cloud Ver.1.16",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -222,33 +222,46 @@ def show_prediction(detail, context, bias):
     st.subheader(label)
 
     st.markdown("#### 当日馬場・バイアス")
-    c1,c2,c3=st.columns(3)
+    c1,c2,c3,c4=st.columns(4)
     c1.metric("馬場",str(rg.iloc[0].get("going","")) or "-")
     c2.metric("当日傾向",(bias or {}).get("summary","データなし"))
     weather=(context or {}).get("weather") or {}
     c3.metric("天気",(context or {}).get("jra_weather") or weather.get("weather_text") or "-")
+    c4.metric(
+        "AI信頼度",
+        str(rg.iloc[0].get("confidence_label","-") or "-"),
+        help=str(rg.iloc[0].get("confidence_reason","") or ""),
+    )
     st.caption(
         "JRA公式出馬表の当日馬場を最優先で going 特徴量へ反映。"
         "騎手の過去総合成績は学習済みAI本体、条件別騎手成績と当日騎乗成績は小幅な騎手補正として反映します。"
     )
+    conf_reason=str(rg.iloc[0].get("confidence_reason","") or "")
+    if conf_reason:
+        changed=bool(rg.iloc[0].get("ranking_changed_top",False))
+        note="（レース内比較で◎を補正）" if changed else "（勝率1位を維持）"
+        st.caption(f"ランキングAI：{conf_reason} {note}")
 
     st.markdown("#### 全出走馬の印付き予想")
     st.caption(mark_legend())
 
     cols=["順位","印","評価","horse_no","horse_name","jockey",
-          "win_prob","top3_prob","jockey_top3_rate","騎手補正",
+          "win_prob","top3_prob","confidence_label","ranking_score","ranking_adjustment",
+          "jockey_top3_rate","騎手補正",
           "基礎AI指数","当日補正","ai_index",
           "odds","expected_value","騎手評価理由","補正理由"]
     q=rg[[c for c in cols if c in rg.columns]].rename(columns={
         "horse_no":"馬番","horse_name":"馬名","jockey":"騎手",
         "win_prob":"勝率","top3_prob":"3着内率",
         "jockey_top3_rate":"騎手過去3着内率","ai_index":"AI指数",
+        "confidence_label":"信頼度","ranking_score":"順位スコア",
+        "ranking_adjustment":"順位補正",
         "odds":"単勝オッズ","expected_value":"AI期待値",
     })
     for c in ["勝率","3着内率","騎手過去3着内率"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").map(pct)
-    for c in ["騎手補正","基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
+    for c in ["順位スコア","順位補正","騎手補正","基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
@@ -336,7 +349,7 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.15")
+st.title("🏇 競馬予想AI Cloud Ver.1.16")
 st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地・レースはクリック選択のみ＋オッズ買い目を常時表示＋100円収支＋◎○▲の1～3着率集計")
 st.markdown("""
@@ -626,6 +639,7 @@ with st.container(border=True):
             str(course),
             bool(use_day_adjustment),
             champion_version(online_adapter),
+            "race-consensus-v1",
         )
 
         if cache_key not in cache:
@@ -670,6 +684,7 @@ with st.container(border=True):
                             enabled=use_day_adjustment
                         )
                         rd=apply_online_adapter(rd,online_adapter)
+                        rd=rerank_prediction(rd)
 
                         race_id=(info.get("race_id_map") or {}).get(
                             f"{course}|{race_key}",""
@@ -724,6 +739,8 @@ with st.container(border=True):
                             "勝率":top.get("win_prob",np.nan),
                             "3着内率":top.get("top3_prob",np.nan),
                             "AI指数":top.get("ai_index",np.nan),
+                            "AI信頼度":top.get("confidence_label",""),
+                            "信頼度点":top.get("confidence_score",np.nan),
                             "単勝オッズ":top.get("odds",np.nan),
                             "AI上位差":gap,
                             "買い目":bet_plan.get("買い目",""),
@@ -746,7 +763,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.15",
+                                "1.16",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -816,7 +833,7 @@ with st.container(border=True):
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
                         ).map(pct)
-                for c in ["AI指数","単勝オッズ","AI上位差"]:
+                for c in ["AI指数","信頼度点","単勝オッズ","AI上位差"]:
                     if c in sq:
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
@@ -1198,7 +1215,7 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.15の自動学習について"):
+with st.expander("Ver.1.16の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
