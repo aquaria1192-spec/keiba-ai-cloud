@@ -20,6 +20,7 @@ from auto_data_builder import (
 )
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day, rerank_prediction
+from recent_trend import attach_recent_trend
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     apply_day_adjustments, fetch_same_day_bias, collect_official_entry_urls
@@ -166,12 +167,13 @@ def snapshot_race(
     detail=apply_day_adjustments(detail,context,bias,enabled=True)
     detail=apply_online_adapter(detail,online_adapter)
     detail=rerank_prediction(detail)
+    detail=attach_recent_trend(detail)
     detail["snapshot_type"]=snapshot_type
     detail["post_time"]=post_time
     detail["minutes_before_post"]=minutes_before
     detail["auto_generated"]=True
 
-    snap=prediction_snapshot(detail,app_version="1.17")
+    snap=prediction_snapshot(detail,app_version="1.18")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):
