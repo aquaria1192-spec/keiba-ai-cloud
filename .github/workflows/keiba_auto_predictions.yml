@@ -50,7 +50,7 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py ranking_layer.py entry_data_store.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py ranking_layer.py ltr_challenger.py entry_data_store.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -72,6 +72,7 @@ jobs:
           import importlib
           import os
           import github_storage_config
+          import ltr_challenger
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
@@ -352,17 +353,19 @@ jobs:
           assert "course=st.radio(" in app
           assert "race=st.radio(" in app
           assert "st.selectbox(" not in app
-          assert "Ver.1.16" in app
+          assert "Ver.1.17" in app
           assert "100円ずつ購入した場合の収支" in app
           assert "回収率" in app
           assert "AI信頼度" in app
+          assert "Learning-to-Rank challenger" in app
+          assert "promotion_decision" in app
           assert "ranking_score" in app
           assert "rerank_prediction(rd)" in app
           assert "plan_to_json" in app
 
           runner=Path("automation_runner.py").read_text(encoding="utf-8")
           assert "rerank_prediction(detail)" in runner
-          assert 'app_version="1.16"' in runner
+          assert 'app_version="1.17"' in runner
           assert "backfill_missing_bet_plans" not in runner
 
           store_src=Path("evaluation_store.py").read_text(encoding="utf-8")
@@ -504,6 +507,30 @@ jobs:
           rb=apply_race_ranking_layer(close_odds_b)
           assert list(ra["horse_no"])==list(rb["horse_no"])
           assert np.allclose(ra["ranking_score"],rb["ranking_score"],equal_nan=True)
+
+          # Ver.1.17 Learning-to-Rank challenger is evaluated but must not
+          # replace production ranking unless the explicit promotion gate passes.
+          report=ltr_challenger.load_validation_report()
+          decision=ltr_challenger.promotion_decision(report)
+          assert decision["status"]=="not_promoted"
+          assert decision["promoted"] is False
+          assert decision["checks"]["validation_win_lift"] is False
+          assert decision["checks"]["validation_top3"] is True
+          labels=ltr_challenger.relevance_labels([1,2,3,4,5,6])
+          assert labels.tolist()==[4,3,2,1,1,0]
+          qdf=pd.DataFrame({
+              "race_id":["r2","r1","r1","r2"],
+              "horse_no":[2,2,1,1],
+              "finish":[2,1,3,1],
+          })
+          sorted_q,qid=ltr_challenger.sorted_qid(qdf)
+          assert sorted_q["race_id"].tolist()==["r1","r1","r2","r2"]
+          assert qid.tolist()==[0,0,1,1]
+          ltr_src=Path("ltr_challenger.py").read_text(encoding="utf-8")
+          assert 'objective="rank:ndcg"' in ltr_src
+          assert "XGBRanker" in ltr_src
+          assert Path("LTR_VALIDATION_V117.json").exists()
+          assert Path("requirements-ltr.txt").exists()
 
           payout_html="""
           <table class="pay_table_01">

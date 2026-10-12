@@ -171,7 +171,7 @@ def snapshot_race(
     detail["minutes_before_post"]=minutes_before
     detail["auto_generated"]=True
 
-    snap=prediction_snapshot(detail,app_version="1.16")
+    snap=prediction_snapshot(detail,app_version="1.17")
     # prediction_snapshot hashes prediction state; include snapshot type/post time
     # in ID so morning and near-post records can coexist even if probabilities match.
     if len(snap):

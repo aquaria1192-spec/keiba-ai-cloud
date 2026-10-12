@@ -1,0 +1,49 @@
+{
+  "version": "1.17",
+  "experiment": "xgboost-lambdamart-challenger",
+  "method": "2016-2023 train / 2024 selection / 2025 untouched holdout",
+  "date_caveat": "Historical dates are sequence_proxy. Year-level ordering is used; exact calendar intervals are not assumed.",
+  "objective": "rank:ndcg",
+  "algorithm": "XGBoost LambdaMART",
+  "query_group": "race_id",
+  "relevance_labels": {
+    "1st": 4,
+    "2nd": 3,
+    "3rd": 2,
+    "4th-5th": 1,
+    "other": 0
+  },
+  "market_aware_candidate": {
+    "uses_market_features": true,
+    "blend_weight": 0.25,
+    "baseline_2024": {
+      "top_pick_win_rate": 0.3612864442440637,
+      "top_pick_top3_rate": 0.6735798016230838
+    },
+    "challenger_2024": {
+      "top_pick_win_rate": 0.36158701532912535,
+      "top_pick_top3_rate": 0.6738803727081455
+    },
+    "baseline_2025": {
+      "top_pick_win_rate": 0.36789297658862874,
+      "top_pick_top3_rate": 0.6740650653694132
+    },
+    "challenger_2025": {
+      "top_pick_win_rate": 0.36819702037093344,
+      "top_pick_top3_rate": 0.6740650653694132
+    }
+  },
+  "pure_non_market_ltr": {
+    "best_2025_top_pick_win_rate": 0.33140772271207053,
+    "best_2025_top_pick_top3_rate": 0.6400121617512922,
+    "decision": "reject"
+  },
+  "promotion_gate": {
+    "minimum_validation_win_lift": 0.002,
+    "maximum_validation_top3_drop": 0.001,
+    "require_holdout_win_non_worse": true,
+    "require_holdout_top3_non_worse": true
+  },
+  "decision": "not_promoted",
+  "reason": "The 2024 validation lift is only about +0.03 percentage points, below the +0.20 percentage-point promotion threshold. The production ranking therefore remains unchanged."
+}

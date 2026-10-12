@@ -54,7 +54,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.16",
+    page_title="競馬予想AI Cloud Ver.1.17",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -349,8 +349,8 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.16")
-st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習。本命順位は勝率モデルを主軸に判定。")
+st.title("🏇 競馬予想AI Cloud Ver.1.17")
+st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習＋Learning-to-Rank昇格ゲート。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地・レースはクリック選択のみ＋オッズ買い目を常時表示＋100円収支＋◎○▲の1～3着率集計")
 st.markdown("""
 <div class="hero">
@@ -763,7 +763,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.16",
+                                "1.17",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -1215,7 +1215,54 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("Ver.1.16の自動学習について"):
+with st.expander("🧪 Ver.1.17 Learning-to-Rank challenger",expanded=False):
+    try:
+        ltr_report=load_validation_report()
+        ltr_gate=promotion_decision(ltr_report)
+        candidate=ltr_report.get("market_aware_candidate",{})
+        b24=candidate.get("baseline_2024",{})
+        c24=candidate.get("challenger_2024",{})
+        b25=candidate.get("baseline_2025",{})
+        c25=candidate.get("challenger_2025",{})
+
+        if ltr_gate.get("promoted"):
+            st.success("Learning-to-Rank challenger は昇格条件を満たしました。")
+        else:
+            st.warning(
+                "Learning-to-Rank challenger は未昇格です。"
+                " 本番の◎○▲はVer.1.16のランキングロジックを維持します。"
+            )
+
+        rows=pd.DataFrame([
+            {
+                "検証": "2024 選定用",
+                "本番◎1着率": b24.get("top_pick_win_rate",np.nan),
+                "LTR◎1着率": c24.get("top_pick_win_rate",np.nan),
+                "本番◎3着内率": b24.get("top_pick_top3_rate",np.nan),
+                "LTR◎3着内率": c24.get("top_pick_top3_rate",np.nan),
+            },
+            {
+                "検証": "2025 最終ホールドアウト",
+                "本番◎1着率": b25.get("top_pick_win_rate",np.nan),
+                "LTR◎1着率": c25.get("top_pick_win_rate",np.nan),
+                "本番◎3着内率": b25.get("top_pick_top3_rate",np.nan),
+                "LTR◎3着内率": c25.get("top_pick_top3_rate",np.nan),
+            },
+        ])
+        for col in [
+            "本番◎1着率","LTR◎1着率","本番◎3着内率","LTR◎3着内率"
+        ]:
+            rows[col]=pd.to_numeric(rows[col],errors="coerce").map(pct)
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.caption(
+            "XGBoost LambdaMART（rank:ndcg）をレース単位で検証しています。"
+            " 2024の◎1着率改善が+0.20ポイント以上などの昇格条件を満たさない限り、"
+            "本番順位へは反映しません。"
+        )
+    except Exception as e:
+        st.info(f"LTR challenger検証情報を表示できませんでした：{e}")
+
+with st.expander("Ver.1.17の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"
