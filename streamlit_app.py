@@ -14,6 +14,15 @@ from cloud_data_builder import fetch_entries_cloud
 from cloud_features import load_feature_store, enrich_entries_cloud
 from batch_predict import batch_predict_day, mark_legend, recommended_bets, rerank_prediction
 from betting_tools import fetch_market_odds, plan_from_json, plan_to_json
+from ltr_challenger import (
+    load_validation_report as load_ltr_validation_report,
+    promotion_decision as ltr_promotion_decision,
+)
+from recent_trend import (
+    attach_recent_trend,
+    load_validation_report as load_trend_validation_report,
+    promotion_decision as trend_promotion_decision,
+)
 from race_day_context import (
     fetch_day_contexts, apply_official_going, merge_entry_conditions,
     fetch_same_day_bias, apply_day_adjustments
@@ -25,7 +34,7 @@ from race_day_context import (
 # signature. Version-check + reload prevents mixed-version calls such as
 # "unexpected keyword argument 'learning_store'".
 import evaluation_store as _evaluation_store
-if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 7:
+if getattr(_evaluation_store, "EVALUATION_STORE_API_VERSION", 0) < 8:
     _evaluation_store = importlib.reload(_evaluation_store)
 
 HistoryBackend = _evaluation_store.HistoryBackend
@@ -54,7 +63,7 @@ MODEL_FILE = BASE/"data"/"cloud_model.joblib"
 JST = ZoneInfo("Asia/Tokyo")
 
 st.set_page_config(
-    page_title="競馬予想AI Cloud Ver.1.17",
+    page_title="競馬予想AI Cloud Ver.1.18",
     page_icon="🏇",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -242,11 +251,22 @@ def show_prediction(detail, context, bias):
         note="（レース内比較で◎を補正）" if changed else "（勝率1位を維持）"
         st.caption(f"ランキングAI：{conf_reason} {note}")
 
+    trend_label=str(rg.iloc[0].get("trend_label","") or "")
+    trend_reason=str(rg.iloc[0].get("trend_reason","") or "")
+    if trend_label:
+        st.caption(
+            f"近走トレンド：**{trend_label}** "
+            f"（{nfmt(rg.iloc[0].get('trend_score'),'',1)}点）"
+            + (f" ／ {trend_reason}" if trend_reason else "")
+            + "　※現在はshadow評価のため順位には未反映"
+        )
+
     st.markdown("#### 全出走馬の印付き予想")
     st.caption(mark_legend())
 
     cols=["順位","印","評価","horse_no","horse_name","jockey",
-          "win_prob","top3_prob","confidence_label","ranking_score","ranking_adjustment",
+          "win_prob","top3_prob","confidence_label","trend_label","trend_score",
+          "ranking_score","ranking_adjustment",
           "jockey_top3_rate","騎手補正",
           "基礎AI指数","当日補正","ai_index",
           "odds","expected_value","騎手評価理由","補正理由"]
@@ -254,14 +274,15 @@ def show_prediction(detail, context, bias):
         "horse_no":"馬番","horse_name":"馬名","jockey":"騎手",
         "win_prob":"勝率","top3_prob":"3着内率",
         "jockey_top3_rate":"騎手過去3着内率","ai_index":"AI指数",
-        "confidence_label":"信頼度","ranking_score":"順位スコア",
+        "confidence_label":"信頼度","trend_label":"近走トレンド",
+        "trend_score":"トレンド点","ranking_score":"順位スコア",
         "ranking_adjustment":"順位補正",
         "odds":"単勝オッズ","expected_value":"AI期待値",
     })
     for c in ["勝率","3着内率","騎手過去3着内率"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").map(pct)
-    for c in ["順位スコア","順位補正","騎手補正","基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
+    for c in ["トレンド点","順位スコア","順位補正","騎手補正","基礎AI指数","当日補正","AI指数","単勝オッズ","AI期待値"]:
         if c in q:
             q[c]=pd.to_numeric(q[c],errors="coerce").round(2)
     st.dataframe(q,use_container_width=True,hide_index=True)
@@ -349,8 +370,8 @@ def put_entry_state(entries, info, feature_store, contexts=None):
     st.session_state.pop("_saved_fp_112",None)
     return features,info
 
-st.title("🏇 競馬予想AI Cloud Ver.1.17")
-st.caption("精度強化モデル＋確定レースからのchampion/challenger自動学習＋Learning-to-Rank昇格ゲート。本命順位は勝率モデルを主軸に判定。")
+st.title("🏇 競馬予想AI Cloud Ver.1.18")
+st.caption("精度強化モデル＋自動学習＋Learning-to-Rank／直近5走トレンド昇格ゲート。本命順位は勝率モデルを主軸に判定。")
 st.caption("開催地・レースはクリック選択のみ＋オッズ買い目を常時表示＋100円収支＋◎○▲の1～3着率集計")
 st.markdown("""
 <div class="hero">
@@ -685,6 +706,7 @@ with st.container(border=True):
                         )
                         rd=apply_online_adapter(rd,online_adapter)
                         rd=rerank_prediction(rd)
+                        rd=attach_recent_trend(rd)
 
                         race_id=(info.get("race_id_map") or {}).get(
                             f"{course}|{race_key}",""
@@ -741,6 +763,8 @@ with st.container(border=True):
                             "AI指数":top.get("ai_index",np.nan),
                             "AI信頼度":top.get("confidence_label",""),
                             "信頼度点":top.get("confidence_score",np.nan),
+                            "近走トレンド":top.get("trend_label",""),
+                            "トレンド点":top.get("trend_score",np.nan),
                             "単勝オッズ":top.get("odds",np.nan),
                             "AI上位差":gap,
                             "買い目":bet_plan.get("買い目",""),
@@ -763,7 +787,7 @@ with st.container(border=True):
                             batch_save=save_course_batch_predictions(
                                 history_backend,
                                 all_detail,
-                                "1.17",
+                                "1.18",
                                 snapshot_type="course_batch",
                                 learning_store=history_backend,
                                 current_champion_version=champion_version(online_adapter),
@@ -833,7 +857,7 @@ with st.container(border=True):
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
                         ).map(pct)
-                for c in ["AI指数","信頼度点","単勝オッズ","AI上位差"]:
+                for c in ["AI指数","信頼度点","トレンド点","単勝オッズ","AI上位差"]:
                     if c in sq:
                         sq[c]=pd.to_numeric(
                             sq[c],errors="coerce"
@@ -1215,10 +1239,57 @@ with st.expander("⏰ 自動レース前予想の保存状況",expanded=False):
     except Exception as ex:
         st.error(f"自己評価を読み込めませんでした：{ex}")
 
-with st.expander("🧪 Ver.1.17 Learning-to-Rank challenger",expanded=False):
+with st.expander("📈 Ver.1.18 直近5走トレンド challenger",expanded=False):
     try:
-        ltr_report=load_validation_report()
-        ltr_gate=promotion_decision(ltr_report)
+        trend_report=load_trend_validation_report()
+        trend_gate=trend_promotion_decision(trend_report)
+        b24=trend_report.get("baseline_2024",{})
+        c24=trend_report.get("candidate_2024",{})
+        b25=trend_report.get("baseline_2025",{})
+        c25=trend_report.get("candidate_2025",{})
+
+        if trend_gate.get("promoted"):
+            st.success("直近5走トレンド challenger は昇格条件を満たしました。")
+        else:
+            st.warning(
+                "直近5走トレンド challenger は未昇格です。"
+                " トレンドは表示・保存しますが、本番の勝率や◎○▲にはまだ反映しません。"
+            )
+
+        rows=pd.DataFrame([
+            {
+                "検証":"2024 選定用",
+                "本番◎1着率":b24.get("top_pick_win_rate",np.nan),
+                "トレンド◎1着率":c24.get("top_pick_win_rate",np.nan),
+                "本番◎3着内率":b24.get("top_pick_top3_rate",np.nan),
+                "トレンド◎3着内率":c24.get("top_pick_top3_rate",np.nan),
+            },
+            {
+                "検証":"2025 最終ホールドアウト",
+                "本番◎1着率":b25.get("top_pick_win_rate",np.nan),
+                "トレンド◎1着率":c25.get("top_pick_win_rate",np.nan),
+                "本番◎3着内率":b25.get("top_pick_top3_rate",np.nan),
+                "トレンド◎3着内率":c25.get("top_pick_top3_rate",np.nan),
+            },
+        ])
+        for col in [
+            "本番◎1着率","トレンド◎1着率",
+            "本番◎3着内率","トレンド◎3着内率"
+        ]:
+            rows[col]=pd.to_numeric(rows[col],errors="coerce").map(pct)
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.caption(
+            "2016～2023学習 → 2024選定 → 2025最終確認。"
+            " 2025の◎1着率は約+0.09ポイントでしたが、"
+            "昇格基準+0.20ポイントに届かず、◎3着内率も約0.18ポイント低下したため未昇格です。"
+        )
+    except Exception as e:
+        st.info(f"近走トレンド検証情報を表示できませんでした：{e}")
+
+with st.expander("🧪 Ver.1.18 Learning-to-Rank challenger",expanded=False):
+    try:
+        ltr_report=load_ltr_validation_report()
+        ltr_gate=ltr_promotion_decision(ltr_report)
         candidate=ltr_report.get("market_aware_candidate",{})
         b24=candidate.get("baseline_2024",{})
         c24=candidate.get("challenger_2024",{})
@@ -1262,7 +1333,7 @@ with st.expander("🧪 Ver.1.17 Learning-to-Rank challenger",expanded=False):
     except Exception as e:
         st.info(f"LTR challenger検証情報を表示できませんでした：{e}")
 
-with st.expander("Ver.1.17の自動学習について"):
+with st.expander("Ver.1.18の自動学習について"):
     st.write(
         "確定したレースを1レースごとに即学習して本番モデルを書き換えることはしません。"
         "レース前に固定した特徴量と予測確率へ、確定着順を後から付与して学習データを蓄積します。"

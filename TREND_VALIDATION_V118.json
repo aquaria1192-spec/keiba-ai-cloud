@@ -1,0 +1,56 @@
+{
+  "version": "1.18",
+  "experiment": "recent-5-run-trend-win-challenger",
+  "method": "2016-2023 train / 2024 selection-calibration / 2025 untouched holdout",
+  "date_caveat": "Historical dates are sequence_proxy. Trend features use prior-start order, not exact elapsed calendar intervals.",
+  "candidate_features": [
+    "finish_trend5",
+    "finish_recent_vs5avg",
+    "finish_std5",
+    "margin_trend5",
+    "margin_recent_vs5avg",
+    "margin_std5",
+    "last3f_rank_trend5",
+    "last3f_rank_recent_vs5avg",
+    "last3f_rank_std5",
+    "recent_starts5",
+    "recent_top3_count5",
+    "recent_win_count5"
+  ],
+  "baseline_2024": {
+    "top_pick_win_rate": 0.3609858731590021,
+    "top_pick_top3_rate": 0.6717763751127142,
+    "win_auc": 0.8547810644634168,
+    "win_logloss": 0.200963137869617,
+    "win_brier": 0.057165560380824945
+  },
+  "candidate_2024": {
+    "top_pick_win_rate": 0.3624887285843102,
+    "top_pick_top3_rate": 0.6762849413886384,
+    "win_auc": 0.8550051324731318,
+    "win_logloss": 0.20082958059846368,
+    "win_brier": 0.057128164467897015
+  },
+  "baseline_2025": {
+    "top_pick_win_rate": 0.3697172392824567,
+    "top_pick_top3_rate": 0.6755852842809364,
+    "win_auc": 0.8619982531383611,
+    "win_logloss": 0.19645425859730367,
+    "win_brier": 0.05608392714985444
+  },
+  "candidate_2025": {
+    "top_pick_win_rate": 0.3706293706293706,
+    "top_pick_top3_rate": 0.6737610215871085,
+    "win_auc": 0.862194870065426,
+    "win_logloss": 0.196333192898912,
+    "win_brier": 0.056042464582360035
+  },
+  "promotion_gate": {
+    "minimum_holdout_win_lift": 0.002,
+    "maximum_holdout_top3_drop": 0.001,
+    "require_win_logloss_non_worse": true,
+    "require_win_brier_non_worse": true
+  },
+  "decision": "not_promoted",
+  "reason": "2025 top-pick win rate improves by about +0.09 percentage points, but this is below the +0.20 point gate and top-pick top3 rate drops by about 0.18 points. Trend signals are therefore recorded and displayed but do not change production ranking."
+}

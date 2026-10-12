@@ -50,7 +50,7 @@ jobs:
 
       - name: Import and regression smoke checks
         run: |
-          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py ranking_layer.py ltr_challenger.py entry_data_store.py streamlit_app.py
+          python -m py_compile automation_runner.py online_learning.py evaluation_store.py batch_predict.py betting_tools.py ranking_layer.py ltr_challenger.py recent_trend.py entry_data_store.py streamlit_app.py
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -72,11 +72,13 @@ jobs:
           import importlib
           import os
           import github_storage_config
+          import joblib
           import ltr_challenger
+          import recent_trend
 
           # The Streamlit app passes these keyword args. A hot-deployed worker
           # must reload evaluation_store until this API is available.
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 7
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 8
           assert entry_data_store.ENTRY_DATA_STORE_API_VERSION >= 2
           assert github_storage_config._token_format_issue(
               "github_pat_ここにFine-grained-token"
@@ -123,7 +125,7 @@ jobs:
           ).parameters
           evaluation_store.EVALUATION_STORE_API_VERSION=0
           evaluation_store=importlib.reload(evaluation_store)
-          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 7
+          assert evaluation_store.EVALUATION_STORE_API_VERSION >= 8
           assert "learning_store" in inspect.signature(
               evaluation_store.save_course_batch_predictions
           ).parameters
@@ -331,7 +333,7 @@ jobs:
           assert "GitHub保存を診断" in app
           assert "invalid_token_format" in app
           assert "実際にGitHubで発行されたトークン" in app
-          assert 'EVALUATION_STORE_API_VERSION", 0) < 7' in app
+          assert 'EVALUATION_STORE_API_VERSION", 0) < 8' in app
           assert 'ENTRY_DATA_STORE_API_VERSION", 0) < 2' in app
           assert "token_source" in app
           assert "importlib.reload(_evaluation_store)" in app
@@ -353,11 +355,15 @@ jobs:
           assert "course=st.radio(" in app
           assert "race=st.radio(" in app
           assert "st.selectbox(" not in app
-          assert "Ver.1.17" in app
+          assert "Ver.1.18" in app
           assert "100円ずつ購入した場合の収支" in app
           assert "回収率" in app
           assert "AI信頼度" in app
           assert "Learning-to-Rank challenger" in app
+          assert "直近5走トレンド challenger" in app
+          assert "近走トレンド" in app
+          assert "trend_score" in app
+          assert "attach_recent_trend(rd)" in app
           assert "promotion_decision" in app
           assert "ranking_score" in app
           assert "rerank_prediction(rd)" in app
@@ -365,7 +371,8 @@ jobs:
 
           runner=Path("automation_runner.py").read_text(encoding="utf-8")
           assert "rerank_prediction(detail)" in runner
-          assert 'app_version="1.17"' in runner
+          assert "attach_recent_trend(detail)" in runner
+          assert 'app_version="1.18"' in runner
           assert "backfill_missing_bet_plans" not in runner
 
           store_src=Path("evaluation_store.py").read_text(encoding="utf-8")
@@ -374,10 +381,15 @@ jobs:
           assert Path("betting_tools.py").exists()
           assert "ranking_score" in store_src
           assert "confidence_label" in store_src
+          assert "trend_score" in store_src
+          assert "trend_label" in store_src
           assert Path("ranking_layer.py").exists()
+          assert Path("recent_trend.py").exists()
+          assert Path("TREND_VALIDATION_V118.json").exists()
 
           from batch_predict import recommended_bets, rerank_prediction
           from ranking_layer import apply_race_ranking_layer, RANKING_LAYER_VERSION
+          from recent_trend import attach_recent_trend
           from betting_tools import (
               parse_market_odds_payload, parse_payouts_html,
               settle_bet_plan, plan_to_json
@@ -531,6 +543,40 @@ jobs:
           assert "XGBRanker" in ltr_src
           assert Path("LTR_VALIDATION_V117.json").exists()
           assert Path("requirements-ltr.txt").exists()
+
+          # Ver.1.18 recent-form trend challenger remains shadow-only.
+          trend_report=recent_trend.load_validation_report()
+          trend_decision=recent_trend.promotion_decision(trend_report)
+          assert trend_decision["status"]=="not_promoted"
+          assert trend_decision["promoted"] is False
+          assert trend_decision["checks"]["win_lift"] is False
+          assert trend_decision["checks"]["top3_guard"] is False
+          assert trend_decision["checks"]["win_logloss"] is True
+          assert trend_decision["checks"]["win_brier"] is True
+
+          trend_sample=pd.DataFrame([
+              {
+                  "horse_no":1,"win_prob":0.40,"top3_prob":0.75,
+                  "順位":1,"印":"◎",
+                  "recent_avg_finish":6.0,"prev_finish":2.0,
+                  "recent_avg_margin":1.2,"prev_margin":0.2,
+                  "recent_avg_last3f_rank":8.0,"prev_last3f_rank":3.0,
+              },
+              {
+                  "horse_no":2,"win_prob":0.30,"top3_prob":0.65,
+                  "順位":2,"印":"○",
+                  "recent_avg_finish":3.0,"prev_finish":7.0,
+                  "recent_avg_margin":0.3,"prev_margin":1.6,
+                  "recent_avg_last3f_rank":4.0,"prev_last3f_rank":9.0,
+              },
+          ])
+          trend_out=attach_recent_trend(trend_sample)
+          assert trend_out.iloc[0]["trend_label"]=="上昇"
+          assert trend_out.iloc[1]["trend_label"]=="下降"
+          assert (trend_out["win_prob"].to_numpy()==trend_sample["win_prob"].to_numpy()).all()
+          assert (trend_out["順位"].to_numpy()==trend_sample["順位"].to_numpy()).all()
+          assert (trend_out["印"].to_numpy()==trend_sample["印"].to_numpy()).all()
+          assert set(trend_out["trend_promoted"])=={False}
 
           payout_html="""
           <table class="pay_table_01">
