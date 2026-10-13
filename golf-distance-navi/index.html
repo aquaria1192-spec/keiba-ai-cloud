@@ -312,7 +312,22 @@ $("unit").value=state.unit;$("shotType").value="normal";renderClubs();renderReco
 var ios=/iPad|iPhone|iPod/.test(navigator.userAgent),standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;if(ios&&!standalone){$("iosHelp").hidden=false;$("iosHelp").textContent="iPhone: Safariの共有ボタン →「ホーム画面に追加」でアプリのように起動できます。"}
 window.addEventListener("beforeinstallprompt",function(e){e.preventDefault();state.prompt=e;$("install").hidden=false});$("install").onclick=async function(){if(!state.prompt)return;state.prompt.prompt();await state.prompt.userChoice;state.prompt=null;$("install").hidden=true};
 if("serviceWorker" in navigator&&window.isSecureContext)navigator.serviceWorker.register("./sw.js").catch(function(){});
-setTimeout(startGps,350);
+// Restart the GPS watch when the app becomes visible, including back/forward cache restoration.
+var gpsResumeTimer=null;
+function resumeGps(){
+ if(document.visibilityState!=="visible")return;
+ clearTimeout(gpsResumeTimer);
+ gpsResumeTimer=setTimeout(function(){
+   gpsResumeTimer=null;
+   if(document.visibilityState==="visible")startGps();
+ },150);
+}
+document.addEventListener("visibilitychange",function(){
+ if(document.visibilityState==="visible")resumeGps();
+ else{clearTimeout(gpsResumeTimer);gpsResumeTimer=null;}
+});
+window.addEventListener("pageshow",resumeGps);
+resumeGps();
 })();
 </script>
 <script src="./osm-import.js"></script>
