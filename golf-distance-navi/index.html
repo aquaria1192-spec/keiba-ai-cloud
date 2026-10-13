@@ -28,9 +28,19 @@
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--bottom));transform:translateX(-50%) translateY(16px);width:min(calc(100% - 28px),520px);background:#202a24;color:#fff;border-radius:12px;padding:12px 14px;opacity:0;pointer-events:none;transition:.18s;z-index:1200;font-size:14px}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .dot{width:20px;height:20px;border-radius:50%;background:#1976d2;border:4px solid #fff;box-shadow:0 0 0 3px #1976d247}.targetDot{width:24px;height:24px;border-radius:50%;background:#e53935;border:4px solid #fff;box-shadow:0 1px 6px #0006}.hidden{display:none!important}
 @media(max-width:380px){.big .n{font-size:52px}}
+
+.shotControls{position:fixed;left:50%;bottom:calc(69px + var(--bottom));transform:translateX(-50%);z-index:850;width:min(760px,100%);background:#fff;border-top:1px solid var(--line);padding:10px 14px;box-shadow:0 -3px 12px #0001}
+.shotControls .field{margin-bottom:6px;gap:3px}.shotControls .field select{padding:8px 10px;min-height:44px}
+.shotReadout{display:flex;align-items:center;gap:10px;margin:2px 0 8px;font-size:13px}.shotReadout>div:first-child{white-space:nowrap}.shotReadout strong{font-size:24px}.shotReadout #shotState{color:var(--muted);font-size:12px;line-height:1.4}
+.shotButtons{display:flex;gap:8px}.shotButtons>.btn{flex:1}.shotButtons>.btn2{width:auto;flex:0 0 68px}
+.shotButtons [hidden]{display:none!important}
+body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-controls-height,220px))}
+.clubChoice{display:block;text-align:left;cursor:pointer;color:var(--g);width:100%;border:1px solid #b8c5bd;border-radius:10px;background:#fff;padding:10px;font:inherit}
+.recommendChip{cursor:pointer;color:var(--g);font:inherit;font-size:13px;min-height:44px}
+.clubChoice:focus-visible,.recommendChip:focus-visible{outline:3px solid #1976d2;outline-offset:2px}
 </style>
 </head>
-<body>
+<body class="roundView">
 <div class="app">
 <header class="top"><div><small>GOLF GPS</small><h1>Golf Distance Navi</h1></div><button id="locate" class="round" type="button" aria-label="現在地取得">◎</button></header>
 <section class="card"><div class="status"><span id="badge" class="badge warn">GPS未取得</span><span id="acc" class="muted">精度 --</span><span id="activeCourseLabel" class="muted"></span></div></section>
@@ -53,16 +63,6 @@
 </section>
 
 <section id="shot" class="screen">
-  <div class="panel">
-    <h2>ショット距離</h2>
-    <div class="field"><label for="club">使用クラブ</label><select id="club"></select></div>
-    <div class="field"><label for="shotType">ショット種別</label><select id="shotType"><option value="normal">通常ショット</option><option value="miss">ミスショット</option><option value="half">ハーフショット</option></select></div>
-    <label class="notice" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer"><input id="continuousShot" type="checkbox" style="width:22px;height:22px;flex:none"><span><b>連続ショット計測</b><br><span class="meta">記録したボール位置を次のショット開始地点にします。</span></span></label>
-    <div class="shot"><div class="cap">ショット飛距離</div><div class="big"><span id="shotDist" class="n">0</span><span id="shotUnit" class="u">yd</span></div><div id="shotState" class="help">打つ前に「ショット開始」を押してください。</div></div>
-    <button id="startShot" class="btn">ショット開始</button>
-    <button id="finishShot" class="btn finish" style="margin-top:10px" disabled>ボール位置で記録</button>
-    <button id="cancelShot" class="btn2" style="margin-top:10px" disabled>キャンセル</button>
-  </div>
   <div class="panel"><div class="head"><h2>クラブ別実戦飛距離</h2><button id="csv" class="link">CSV</button></div><div id="stats" class="stats"></div></div>
   <div class="panel">
     <h2>クラブ別ショット分布</h2>
@@ -73,6 +73,7 @@
   </div>
   <div class="panel">
     <h2>ショット設定</h2>
+<label class="notice" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer"><input id="continuousShot" type="checkbox" style="width:22px;height:22px;flex:none"><span><b>連続ショット計測</b><br><span class="meta">記録したボール位置を次のショット開始地点にします。</span></span></label>
     <div class="field"><label for="unit">距離単位</label><select id="unit"><option value="yd">ヤード</option><option value="m">メートル</option></select></div>
     <div class="field"><label for="clubEdit">クラブ一覧（1行1クラブ）</label><textarea id="clubEdit"></textarea></div>
     <button id="saveSettings" class="btn">設定を保存</button>
@@ -102,6 +103,15 @@
   </div>
 </section>
 </main>
+
+<section id="shotControls" class="shotControls" aria-label="ショット計測">
+  <div class="grid">
+    <div class="field"><label for="club">使用クラブ</label><select id="club"></select></div>
+    <div class="field"><label for="shotType">ショット種別</label><select id="shotType"><option value="normal">通常</option><option value="miss">ミス</option><option value="half">ハーフ</option></select></div>
+  </div>
+  <div class="shotReadout"><div>ショット <strong id="shotDist">0</strong> <span id="shotUnit">yd</span></div><div id="shotState" role="status">打つ前に「ショット開始」を押してください。</div></div>
+  <div class="shotButtons"><button id="startShot" class="btn">ショット開始</button><button id="finishShot" class="btn finish" hidden disabled>ボール位置で記録</button><button id="cancelShot" class="btn2" hidden disabled>中止</button></div>
+</section>
 
 <nav class="nav">
 <button class="active" data-s="distance"><span>⌖</span>距離</button>
@@ -186,10 +196,20 @@ function renderClubRecommendation(targetMeters){
  if(!Number.isFinite(targetMeters)){box.innerHTML='<div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">目標地点をタップしてください</div>';return}
  var a=clubPerformances().map(function(x){x.diff=Math.abs(x.trueDist-targetMeters);return x}).sort(function(x,y){return x.diff-y.diff}).slice(0,3);
  if(!a.length){box.innerHTML='<div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">通常ショットの実測データがありません</div><div class="meta">ミス／ハーフを除いた通常ショットがたまると候補を表示します。</div>';return}
- var main=a[0],targetShown=fmt(targetMeters),trueShown=fmt(main.trueDist);
- var html='<div class="recommendTitle">おすすめクラブ / 目標 '+targetShown+ul()+'</div><div class="recommendMain">'+main.club+' <span class="meta">実戦 '+trueShown+ul()+' / '+main.count+'球</span></div>';
- if(a.length>1){html+='<div class="recommendAlt">'+a.slice(1).map(function(x){return'<span class="recommendChip">'+x.club+' 実戦 '+fmt(x.trueDist)+ul()+'</span>'}).join("")+'</div>'}
- box.innerHTML=html;
+ box.innerHTML='<div class="recommendTitle">おすすめクラブ / 目標 '+fmt(targetMeters)+ul()+'（タップで選択）</div>';
+ var choices=document.createElement("div");choices.className="recommendAlt";
+ a.forEach(function(p,i){
+   var button=document.createElement("button");button.type="button";button.className=i===0?"clubChoice":"recommendChip";
+   button.textContent=p.club+" 実戦 "+fmt(p.trueDist)+ul()+" / "+p.count+"球";
+   button.onclick=function(){selectRecommendedClub(p.club)};
+   choices.appendChild(button);
+ });
+ box.appendChild(choices);
+}
+function selectRecommendedClub(club){
+ if(state.clubs.indexOf(club)<0){var option=document.createElement("option");option.value=club;option.textContent=club;$("club").appendChild(option)}
+ $("club").value=club;toast(club+" を選択しました");
+
 }
 function validPoint(p){return p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))}
 function localVector(a,b){
@@ -259,9 +279,9 @@ function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{
 
 function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n")}
 function updateShot(){var d=state.shotStart&&state.current?fmt(hav(state.shotStart,state.current)):0;$("shotUnit").textContent=ul();$("shotDist").textContent=d}
-function setShotMeasuringUi(message){$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent=message;updateShot()}
+function setShotMeasuringUi(message){$("startShot").hidden=true;$("finishShot").hidden=false;$("cancelShot").hidden=false;$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent=message;updateShot()}
 function startShot(){if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};state.shotAim=validPoint(state.target)?{lat:Number(state.target.lat),lng:Number(state.target.lng)}:null;setShotMeasuringUi("計測中です。ボール位置まで移動してください。")}
-function cancelShot(){state.shotStart=null;state.shotAim=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="打つ前に「ショット開始」を押してください。";updateShot()}
+function cancelShot(){$("startShot").hidden=false;$("finishShot").hidden=true;$("cancelShot").hidden=true;state.shotStart=null;state.shotAim=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="打つ前に「ショット開始」を押してください。";updateShot()}
 function finishShot(){
  if(!state.shotStart||!state.current)return;
  var m=hav(state.shotStart,state.current);
@@ -295,7 +315,10 @@ function saveSettings(){state.unit=$("unit").value;localStorage.setItem("gdn_uni
 function exportCsv(){if(!state.history.length){toast("出力する記録がありません");return}var rows=[["日時","コース","クラブ","種別","距離(m)","距離(yd)","GPS精度(m)"]];state.history.forEach(function(r){var c=state.courses.find(function(v){return v.id===r.courseId}),k=shotKind(r)==="miss"?"ミス":shotKind(r)==="half"?"ハーフ":"通常";rows.push([new Date(r.at).toLocaleString("ja-JP"),c?c.name:"",r.club,k,r.meters.toFixed(1),(r.meters/YD).toFixed(1),r.accuracy==null?"":Math.round(r.accuracy)])});var q=function(v){return '"'+String(v).replaceAll('"','""')+'"'};downloadBlob("\ufeff"+rows.map(function(r){return r.map(q).join(",")}).join("\r\n"),"golf-shot-history.csv","text/csv;charset=utf-8")}
 function downloadBlob(content,name,type){var blob=new Blob([content],{type:type}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}
 
-function sw(name){document.querySelectorAll(".screen").forEach(function(e){e.classList.toggle("active",e.id===name)});document.querySelectorAll(".nav button").forEach(function(e){e.classList.toggle("active",e.dataset.s===name)});if(name==="distance"&&state.map)setTimeout(function(){state.map.invalidateSize()},80);if(name==="shot")renderRecords()}
+function sw(name){$("shotControls").hidden=name!=="distance";document.body.classList.toggle("roundView",name==="distance");document.querySelectorAll(".screen").forEach(function(e){e.classList.toggle("active",e.id===name)});document.querySelectorAll(".nav button").forEach(function(e){e.classList.toggle("active",e.dataset.s===name)});if(name==="distance"&&state.map)setTimeout(function(){state.map.invalidateSize()},80);if(name==="shot")renderRecords()}
+function sizeShotControls(){document.documentElement.style.setProperty("--shot-controls-height",$("shotControls").offsetHeight+"px")}
+if(typeof ResizeObserver!=="undefined")new ResizeObserver(sizeShotControls).observe($("shotControls"));
+window.addEventListener("resize",sizeShotControls);sizeShotControls();
 document.querySelectorAll(".nav button").forEach(function(b){b.onclick=function(){sw(b.dataset.s)}});
 
 $("locate").onclick=startGps;$("recenter").onclick=recenter;$("courseCenter").onclick=focusSelectedCourse;$("clearTarget").onclick=clearTarget;
