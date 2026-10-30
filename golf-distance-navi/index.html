@@ -58,6 +58,9 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
 .photoPresets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.photoPresets button[aria-pressed="true"]{background:#e9f3ed;border-color:var(--g);color:var(--g)}
 .photoSlider{margin-bottom:8px}.photoSlider label{display:flex;justify-content:space-between;font-size:13px;font-weight:700}
 .photoSlider input{display:block;width:100%;height:36px;margin:0;accent-color:var(--g)}.photoSettings>.meta{margin:6px 0 12px}
+.greenSettings{margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:0 10px}
+.greenSettings summary{min-height:44px;padding:12px 0;cursor:pointer;font-size:13px;font-weight:700}
+.greenSettings .field{margin-top:10px}.greenSettings .grid{margin-bottom:8px}
 </style>
 </head>
 <body class="roundView">
@@ -71,6 +74,14 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
     <h2>航空写真で距離測定</h2>
     <p class="help">青い丸がGPS現在地です。航空写真をタップすると赤い目標マーカーを置き、現在地からそこまでの直線距離を表示します。</p>
     <div class="mapwrap"><div id="map"></div><div class="mapbtns"><button id="recenter" class="mapbtn">現在地</button><button id="courseCenter" class="mapbtn">コース</button><button id="clearTarget" class="mapbtn">目標解除</button></div></div>
+    <details class="greenSettings">
+      <summary>グリーン候補・ホールを表示</summary>
+      <div class="grid"><button id="loadGreens" class="btn2" type="button">グリーン候補を取得</button><button id="refreshGreens" class="btn2" type="button">最新情報に更新</button></div>
+      <label class="mapOption"><input id="showGreens" type="checkbox" checked>航空写真に重ねて表示</label>
+      <div class="field"><label for="greenSelect">目標にするグリーン</label><select id="greenSelect" disabled><option value="">グリーン候補を選択</option></select></div>
+      <div id="greenStatus" class="meta" role="status">コースを選び「グリーン候補を取得」を押してください。</div>
+      <p class="sourceNote">写真の自動認識ではなく、OSM登録情報を表示します。目標はグリーンの目安の中心で、当日のピン位置ではありません。2グリーンの場合は使用する側を選んでください。<br>グリーン・ホール情報：© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a></p>
+    </details>
     <details class="photoSettings">
       <summary>航空写真の明るさ・色を調整</summary>
       <div class="photoPresets" role="group" aria-label="航空写真の表示設定">
@@ -203,6 +214,101 @@ Object.keys(photoPresets).forEach(function(id){
 });
 applyPhotoSettings(false);
 
+// OSM green candidates are approximate locations, never live pin positions.
+var greenData={greens:[],holes:[],nearby:false},greenLayer=null,greenRequest=null,greenEpoch=0;
+function greenPoint(p){return p&&p.lat!=null&&(p.lon!=null||p.lng!=null)&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lon==null?p.lng:p.lon))&&Math.abs(Number(p.lat))<=90&&Math.abs(Number(p.lon==null?p.lng:p.lon))<=180?{lat:Number(p.lat),lng:Number(p.lon==null?p.lng:p.lon)}:null}
+function greenGeometry(e){
+ var paths=[];
+ if(Array.isArray(e.geometry))paths.push(e.geometry);
+ if(Array.isArray(e.members))e.members.forEach(function(m){if(m.role!=="inner"&&Array.isArray(m.geometry))paths.push(m.geometry)});
+ return paths.map(function(path){return path.map(greenPoint).filter(Boolean)}).filter(function(path){return path.length>1});
+}
+function parseGreenData(raw,nearby){
+ if(!raw||!Array.isArray(raw.elements)||raw.remark)throw new Error("Incomplete OSM response");
+ var result={greens:[],holes:[],nearby:!!nearby};
+ raw.elements.slice(0,1500).forEach(function(e){
+   var tags=e.tags||{},paths=greenGeometry(e),points=[].concat.apply([],paths),p=greenPoint(e)||greenPoint(e.center);
+   if(!p&&points.length)p={lat:points.reduce(function(n,v){return n+v.lat},0)/points.length,lng:points.reduce(function(n,v){return n+v.lng},0)/points.length};
+   if(!p)return;
+   var item={id:e.type+"-"+e.id,point:p,paths:paths,ref:String(tags.ref||"").slice(0,30),name:String(tags.name||"").slice(0,80)};
+   if(tags.golf==="green"&&result.greens.length<200)result.greens.push(item);
+   if(tags.golf==="hole"&&paths.length&&result.holes.length<200){item.end=paths[0][paths[0].length-1];result.holes.push(item)}
+ });
+ result.greens.forEach(function(g,i){
+   g.label=g.ref?g.ref+"番グリーン（OSM）":"グリーン候補 "+(i+1);
+   if(!g.ref){var near=result.holes.filter(function(h){return h.ref&&hav(h.end,g.point)<=80}).sort(function(a,b){return hav(a.end,g.point)-hav(b.end,g.point)});if(near.length)g.label=near[0].ref+"番付近（推定）・候補 "+(i+1)}
+   if(g.name)g.label+=" / "+g.name;
+ });
+ return result;
+}
+function greenQuery(c,nearby){
+ var s=c.source||{},p=greenPoint(s.courseCenter),type=String(s.osmType||""),id=String(s.osmId||"");
+ if(!nearby&&/^(way|relation)$/.test(type)&&/^\d+$/.test(id))return '[out:json][timeout:20];'+type+'('+id+');map_to_area->.courseArea;.courseArea out ids;nwr(area.courseArea)["golf"~"^(green|hole)$"];out geom;';
+ if(!p)throw new Error("no-center");
+ return '[out:json][timeout:20];nwr(around:2500,'+p.lat+','+p.lng+')["golf"~"^(green|hole)$"];out geom;';
+}
+function greenMessage(text){$("greenStatus").textContent=text}
+function resetGreenCourse(){
+ greenEpoch++;if(greenRequest)greenRequest.abort();greenRequest=null;
+ greenData={greens:[],holes:[],nearby:false};if(greenLayer)greenLayer.clearLayers();
+ $("greenSelect").innerHTML='<option value="">グリーン候補を選択</option>';$("greenSelect").disabled=true;
+ $("loadGreens").disabled=false;$("refreshGreens").disabled=false;
+ greenMessage("コースを選び「グリーン候補を取得」を押してください。");
+}
+function chooseGreen(id){
+ var g=greenData.greens.find(function(x){return x.id===id});if(!g||!state.map)return;
+ state.target={lat:g.point.lat,lng:g.point.lng};drawTarget();updateTarget();state.map.setView([g.point.lat,g.point.lng],18);
+ $("greenSelect").value=g.id;greenMessage(g.label+" の目安の中心を目標に設定しました。当日の使用グリーンを確認してください。");
+}
+function renderGreenData(){
+ var sel=$("greenSelect");sel.innerHTML='<option value="">グリーン候補を選択</option>';
+ greenData.greens.forEach(function(g){var o=document.createElement("option");o.value=g.id;o.textContent=g.label;sel.appendChild(o)});sel.disabled=!greenData.greens.length;
+ if(!state.map||typeof L==="undefined")return;
+ if(!greenLayer)greenLayer=L.layerGroup().addTo(state.map);greenLayer.clearLayers();if(!$("showGreens").checked)return;
+ greenData.holes.forEach(function(h){h.paths.forEach(function(path){var line=L.polyline(path.map(function(p){return[p.lat,p.lng]}),{color:"#fff",weight:3,opacity:.8,dashArray:"6 6",interactive:false});line.addTo(greenLayer)});var label=document.createElement("span");label.textContent=h.ref?h.ref+"番（OSM経路）":"ホール経路";L.circleMarker([h.end.lat,h.end.lng],{radius:4,color:"#222",fillColor:"#fff",fillOpacity:1}).bindTooltip(label).addTo(greenLayer)});
+ greenData.greens.forEach(function(g){
+   g.paths.forEach(function(path){var a=path[0],b=path[path.length-1];if(path.length>=4&&a.lat===b.lat&&a.lng===b.lng)L.polygon(path.map(function(p){return[p.lat,p.lng]}),{color:"#ffeb3b",weight:3,fillColor:"#ffeb3b",fillOpacity:.12,bubblingMouseEvents:false}).on("click",function(){chooseGreen(g.id)}).addTo(greenLayer)});
+   var label=document.createElement("span");label.textContent=g.label;
+   L.circleMarker([g.point.lat,g.point.lng],{radius:9,color:"#fff",weight:3,fillColor:"#d17a00",fillOpacity:1,bubblingMouseEvents:false}).bindTooltip(label).on("click",function(){chooseGreen(g.id)}).addTo(greenLayer);
+ });
+}
+async function fetchGreenRaw(query,signal){
+ var endpoints=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
+ for(var i=0;i<endpoints.length;i++){
+   if(signal.aborted)throw new Error("cancelled");
+   var controller=new AbortController(),abort=function(){controller.abort()};signal.addEventListener("abort",abort);
+   var timer=setTimeout(abort,25000);
+   try{var response=await fetch(endpoints[i],{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"data="+encodeURIComponent(query),signal:controller.signal});if(!response.ok)throw new Error("http");var data=await response.json();if(!Array.isArray(data.elements)||data.remark)throw new Error("incomplete");return data}
+   catch(e){if(signal.aborted||i===endpoints.length-1)throw e}
+   finally{clearTimeout(timer);signal.removeEventListener("abort",abort)}
+ }
+}
+async function loadGreenCandidates(force){
+ var c=currentCourse();if(!c){greenMessage("先に使用するコースを選択してください。");return}
+ if(!state.map){greenMessage("地図を読み込んでからお試しください。");return}
+ if(greenRequest)return;
+ var epoch=++greenEpoch,controller=new AbortController();greenRequest=controller;
+ var key="gdn_green_candidates_v1_"+c.id;
+ $("loadGreens").disabled=true;$("refreshGreens").disabled=true;greenMessage("グリーン・ホール情報を取得中です…");
+ try{
+   var cached=load(key,null),raw,nearby=false;
+   if(!force&&cached&&cached.at>Date.now()-7*86400000&&cached.courseSignature===JSON.stringify(c.source||{})){raw=cached.raw;nearby=!!cached.nearby}
+   else{
+     var query=greenQuery(c,false);nearby=query.indexOf("around:")>=0;raw=await fetchGreenRaw(query,controller.signal);
+     if(!nearby&&!raw.elements.some(function(e){return e.type==="area"||(e.type===String((c.source||{}).osmType)&&String(e.id)===String((c.source||{}).osmId))})) {nearby=true;raw=await fetchGreenRaw(greenQuery(c,true),controller.signal)}
+   }
+   if(epoch!==greenEpoch||state.courseId!==c.id)return;
+   greenData=parseGreenData(raw,nearby);renderGreenData();
+   try{save(key,{at:cached&&raw===cached.raw?cached.at:Date.now(),raw:raw,nearby:nearby,courseSignature:JSON.stringify(c.source||{})})}catch(e){}
+   greenMessage((nearby?"コース中心から2.5km以内の候補です。隣接コースを含む場合があります。 ":"")+"グリーン "+greenData.greens.length+"件・ホール経路 "+greenData.holes.length+"件。"+(greenData.greens.length?"候補をタップすると目安の中心まで測距します。番号の「推定」は経路終点との近さから付けています。":"グリーン情報がありません。航空写真をタップして目標を指定してください。"));
+ }catch(e){if(epoch===greenEpoch)greenMessage(e.message==="no-center"?"このコースには位置情報がありません。検索からコースを登録してください。":"取得できませんでした。通信状態を確認して再度お試しください。航空写真のタップ測距は利用できます。")}
+ finally{if(epoch===greenEpoch){greenRequest=null;$("loadGreens").disabled=false;$("refreshGreens").disabled=false}}
+}
+$("loadGreens").onclick=function(){loadGreenCandidates(false)};
+$("refreshGreens").onclick=function(){loadGreenCandidates(true)};
+$("greenSelect").onchange=function(){chooseGreen(this.value)};
+$("showGreens").onchange=renderGreenData;
+
 function initMap(){
  if(typeof L==="undefined"){toast("地図ライブラリを読み込めませんでした");return}
  state.map=L.map("map",{zoomControl:false}).setView([36.5,139.9],6);
@@ -333,13 +439,14 @@ function renderCourseSelect(){
 }
 function updateCourseLabel(){var c=currentCourse();$("activeCourseLabel").textContent=c?"使用コース: "+c.name:""}
 function changeCourse(id){
+ if(state.courseId!==(id||""))resetGreenCourse();
  state.courseId=id||"";if(state.courseId)localStorage.setItem("gdn_course_id",state.courseId);else localStorage.removeItem("gdn_course_id");
  renderCourseSelect();updateCourseLabel();if(state.courseId)focusSelectedCourse();
 }
-function newCourse(){var name=prompt("コース名を入力してください");if(name===null)return;name=name.trim();if(!name)return;var c={id:"c"+Date.now(),name:name,source:{provider:"manual"}};state.courses.push(c);save("gdn_courses",state.courses);state.courseId=c.id;localStorage.setItem("gdn_course_id",c.id);renderCourseSelect();toast(name+" を追加しました")}
-function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコースを選択してください");return}if(!confirm(c.name+" を削除しますか？"))return;state.courses=state.courses.filter(function(x){return x.id!==c.id});save("gdn_courses",state.courses);state.courseId="";localStorage.removeItem("gdn_course_id");renderCourseSelect();toast("コースを削除しました")}
+function newCourse(){var name=prompt("コース名を入力してください");if(name===null)return;name=name.trim();if(!name)return;var c={id:"c"+Date.now(),name:name,source:{provider:"manual"}};state.courses.push(c);save("gdn_courses",state.courses);state.courseId=c.id;resetGreenCourse();localStorage.setItem("gdn_course_id",c.id);renderCourseSelect();toast(name+" を追加しました")}
+function deleteCourse(){var c=currentCourse();if(!c){toast("削除するコースを選択してください");return}if(!confirm(c.name+" を削除しますか？"))return;state.courses=state.courses.filter(function(x){return x.id!==c.id});save("gdn_courses",state.courses);state.courseId="";resetGreenCourse();localStorage.removeItem("gdn_course_id");renderCourseSelect();toast("コースを削除しました")}
 function exportCourses(){if(!state.courses.length){toast("バックアップするコースがありません");return}downloadBlob(JSON.stringify({app:"Golf Distance Navi",version:3,exportedAt:new Date().toISOString(),courses:state.courses},null,2),"golf-courses-backup.json","application/json")}
-function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result),a=Array.isArray(d)?d:d.courses;if(!Array.isArray(a))throw new Error();state.courses=a.slice(0,300).map(function(c){return{id:String(c.id||("c"+Date.now()+Math.random())),name:String(c.name||"名称未設定").slice(0,80),source:c.source||{}}});save("gdn_courses",state.courses);state.courseId=state.courses[0]?state.courses[0].id:"";if(state.courseId)localStorage.setItem("gdn_course_id",state.courseId);renderCourseSelect();toast("コースデータを復元しました")}catch(e){toast("読み込めませんでした")}};r.readAsText(file)}
+function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result),a=Array.isArray(d)?d:d.courses;if(!Array.isArray(a))throw new Error();resetGreenCourse();state.courses=a.slice(0,300).map(function(c){return{id:String(c.id||("c"+Date.now()+Math.random())),name:String(c.name||"名称未設定").slice(0,80),source:c.source||{}}});save("gdn_courses",state.courses);state.courseId=state.courses[0]?state.courses[0].id:"";if(state.courseId)localStorage.setItem("gdn_course_id",state.courseId);renderCourseSelect();toast("コースデータを復元しました")}catch(e){toast("読み込めませんでした")}};r.readAsText(file)}
 
 function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n")}
 function updateShot(){var d=state.shotStart&&state.current?fmt(hav(state.shotStart,state.current)):0;$("shotUnit").textContent=ul();$("shotDist").textContent=d}
