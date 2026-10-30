@@ -52,6 +52,12 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
 #shotDetails summary{cursor:pointer;min-height:44px;padding:10px 8px;font-size:13px;font-weight:700}
 #shotDetails .field{margin-top:6px}
 .shotReadout[hidden]{display:none!important}
+#map .leaflet-tile-pane{filter:var(--photo-filter,brightness(100%) contrast(100%) saturate(100%))}
+.photoSettings{margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:0 10px}
+.photoSettings summary{min-height:44px;padding:12px 0;cursor:pointer;font-size:13px;font-weight:700}
+.photoPresets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.photoPresets button[aria-pressed="true"]{background:#e9f3ed;border-color:var(--g);color:var(--g)}
+.photoSlider{margin-bottom:8px}.photoSlider label{display:flex;justify-content:space-between;font-size:13px;font-weight:700}
+.photoSlider input{display:block;width:100%;height:36px;margin:0;accent-color:var(--g)}.photoSettings>.meta{margin:6px 0 12px}
 </style>
 </head>
 <body class="roundView">
@@ -65,6 +71,16 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
     <h2>航空写真で距離測定</h2>
     <p class="help">青い丸がGPS現在地です。航空写真をタップすると赤い目標マーカーを置き、現在地からそこまでの直線距離を表示します。</p>
     <div class="mapwrap"><div id="map"></div><div class="mapbtns"><button id="recenter" class="mapbtn">現在地</button><button id="courseCenter" class="mapbtn">コース</button><button id="clearTarget" class="mapbtn">目標解除</button></div></div>
+    <details class="photoSettings">
+      <summary>航空写真の明るさ・色を調整</summary>
+      <div class="photoPresets" role="group" aria-label="航空写真の表示設定">
+        <button id="photoStandard" class="mini" type="button">標準</button><button id="photoBright" class="mini" type="button">明るめ</button><button id="photoClear" class="mini" type="button">くっきり</button>
+      </div>
+      <div class="photoSlider"><label for="photoBrightness">明るさ <output id="photoBrightnessValue" for="photoBrightness">100%</output></label><input id="photoBrightness" type="range" min="60" max="180" step="5" value="100"></div>
+      <div class="photoSlider"><label for="photoContrast">コントラスト <output id="photoContrastValue" for="photoContrast">100%</output></label><input id="photoContrast" type="range" min="60" max="180" step="5" value="100"></div>
+      <div class="photoSlider"><label for="photoSaturation">色の濃さ <output id="photoSaturationValue" for="photoSaturation">100%</output></label><input id="photoSaturation" type="range" min="0" max="200" step="5" value="100"></div>
+      <div class="meta">調整はすぐに反映され、次回も同じ設定で表示します。「標準」で元に戻せます。</div>
+    </details>
     <div class="distanceSummary"><div class="distanceHero"><div class="cap">現在地 → タップ地点</div><div class="big"><span id="target" class="n">---</span><span id="targetUnit" class="u">yd</span></div><div id="targetSub" class="sub">航空写真をタップしてください</div></div>
     <div id="clubRecommend" class="recommendBox"><div class="recommendTitle">おすすめクラブ</div><div class="recommendMain">目標地点をタップしてください</div></div>
     </div>
@@ -153,6 +169,39 @@ function ul(){return state.unit}
 function currentCourse(){return state.courses.find(function(c){return c.id===state.courseId})||null}
 function gpsStatus(t,c){$("badge").textContent=t;$("badge").className="badge "+c}
 function courseCenter(c){var p=c&&c.source&&c.source.courseCenter;return p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))?{lat:Number(p.lat),lng:Number(p.lng)}:null}
+
+var photoPresets={photoStandard:{brightness:100,contrast:100,saturation:100},photoBright:{brightness:125,contrast:105,saturation:110},photoClear:{brightness:110,contrast:130,saturation:120}};
+function normalizePhotoSettings(value){
+ value=value&&typeof value==="object"?value:{};
+ var result={};
+ [["brightness",60,180],["contrast",60,180],["saturation",0,200]].forEach(function(item){
+   var raw=value[item[0]],n=typeof raw==="number"?raw:NaN;
+   result[item[0]]=Number.isFinite(n)?Math.max(item[1],Math.min(item[2],Math.round(n/5)*5)):100;
+ });
+ return result;
+}
+var photoSettings=normalizePhotoSettings(load("gdn_photo_settings",null));
+function applyPhotoSettings(persist){
+ $("map").style.setProperty("--photo-filter","brightness("+photoSettings.brightness+"%) contrast("+photoSettings.contrast+"%) saturate("+photoSettings.saturation+"%)");
+ ["brightness","contrast","saturation"].forEach(function(key){
+   var id="photo"+key.charAt(0).toUpperCase()+key.slice(1);
+   $(id).value=photoSettings[key];$(id+"Value").textContent=photoSettings[key]+"%";
+ });
+ Object.keys(photoPresets).forEach(function(id){
+   var preset=photoPresets[id],active=["brightness","contrast","saturation"].every(function(key){return preset[key]===photoSettings[key]});
+   $(id).setAttribute("aria-pressed",String(active));
+ });
+ if(persist){try{save("gdn_photo_settings",photoSettings)}catch(e){toast("表示は変更しましたが、設定を保存できませんでした")}}
+}
+["brightness","contrast","saturation"].forEach(function(key){
+ var id="photo"+key.charAt(0).toUpperCase()+key.slice(1);
+ $(id).oninput=function(){photoSettings[key]=Number(this.value);photoSettings=normalizePhotoSettings(photoSettings);applyPhotoSettings(false)};
+ $(id).onchange=function(){applyPhotoSettings(true)};
+});
+Object.keys(photoPresets).forEach(function(id){
+ $(id).onclick=function(){photoSettings=normalizePhotoSettings(photoPresets[id]);applyPhotoSettings(true)};
+});
+applyPhotoSettings(false);
 
 function initMap(){
  if(typeof L==="undefined"){toast("地図ライブラリを読み込めませんでした");return}
