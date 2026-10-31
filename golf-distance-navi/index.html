@@ -272,13 +272,31 @@ function renderGreenData(){
    L.circleMarker([g.point.lat,g.point.lng],{radius:9,color:"#fff",weight:3,fillColor:"#d17a00",fillOpacity:1,bubblingMouseEvents:false}).bindTooltip(label).on("click",function(){chooseGreen(g.id)}).addTo(greenLayer);
  });
 }
+async function loadPublishedGreenRaw(c,signal){
+ var center=greenPoint((c.source||{}).courseCenter);if(!center)throw new Error("no-center");
+ var response=await fetch("./green-data/manifest.json",{cache:"no-store",signal:signal});
+ if(!response.ok)throw new Error("local-unavailable");
+ var manifest=await response.json();if(manifest.available!==true||!manifest.tiles||manifest.version!==1)throw new Error("local-unavailable");
+ var latDelta=2500/110000,lngDelta=2500/(110000*Math.max(.1,Math.cos(center.lat*Math.PI/180))),keys=[];
+ for(var lat=Math.floor((center.lat-latDelta)*4);lat<=Math.floor((center.lat+latDelta)*4);lat++){
+   for(var lng=Math.floor((center.lng-lngDelta)*4);lng<=Math.floor((center.lng+lngDelta)*4);lng++){var key=lat+"_"+lng;if(Object.prototype.hasOwnProperty.call(manifest.tiles,key))keys.push(key)}
+ }
+ var parts=await Promise.all(keys.map(async function(key){var r=await fetch("./green-data/"+key+".json",{signal:signal});if(!r.ok)throw new Error("local-unavailable");var data=await r.json();if(!Array.isArray(data.elements)||data.remark)throw new Error("local-unavailable");return data.elements}));
+ var elements=[].concat.apply([],parts).filter(function(e){
+   var paths=greenGeometry(e),pts=[].concat.apply([],paths),p=greenPoint(e)||greenPoint(e.center);
+   if(!p&&pts.length)p={lat:pts.reduce(function(n,v){return n+v.lat},0)/pts.length,lng:pts.reduce(function(n,v){return n+v.lng},0)/pts.length};
+   return p&&hav(center,p)<=2500;
+ });
+ return {elements:elements};
+}
+
 async function fetchGreenRaw(query,signal){
  var endpoints=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
  for(var i=0;i<endpoints.length;i++){
    if(signal.aborted)throw new Error("cancelled");
    var controller=new AbortController(),abort=function(){controller.abort()};signal.addEventListener("abort",abort);
    var timer=setTimeout(abort,25000);
-   try{var response=await fetch(endpoints[i],{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"data="+encodeURIComponent(query),signal:controller.signal});if(!response.ok)throw new Error("http");var data=await response.json();if(!Array.isArray(data.elements)||data.remark)throw new Error("incomplete");return data}
+   try{var response=await fetch(endpoints[i]+"?data="+encodeURIComponent(query),{signal:controller.signal});if(!response.ok)throw new Error("http-"+response.status);var data=await response.json();if(!Array.isArray(data.elements)||data.remark)throw new Error("incomplete");return data}
    catch(e){if(signal.aborted||i===endpoints.length-1)throw e}
    finally{clearTimeout(timer);signal.removeEventListener("abort",abort)}
  }
@@ -288,20 +306,31 @@ async function loadGreenCandidates(force){
  if(!state.map){greenMessage("地図を読み込んでからお試しください。");return}
  if(greenRequest)return;
  var epoch=++greenEpoch,controller=new AbortController();greenRequest=controller;
- var key="gdn_green_candidates_v1_"+c.id;
+ var key="gdn_green_candidates_v2_"+c.id;
  $("loadGreens").disabled=true;$("refreshGreens").disabled=true;greenMessage("グリーン・ホール情報を取得中です…");
  try{
    var cached=load(key,null),raw,nearby=false;
    if(!force&&cached&&cached.at>Date.now()-7*86400000&&cached.courseSignature===JSON.stringify(c.source||{})){raw=cached.raw;nearby=!!cached.nearby}
    else{
-     var query=greenQuery(c,false);nearby=query.indexOf("around:")>=0;raw=await fetchGreenRaw(query,controller.signal);
-     if(!nearby&&!raw.elements.some(function(e){return e.type==="area"||(e.type===String((c.source||{}).osmType)&&String(e.id)===String((c.source||{}).osmId))})) {nearby=true;raw=await fetchGreenRaw(greenQuery(c,true),controller.signal)}
+     try{raw=await loadPublishedGreenRaw(c,controller.signal);nearby=true}
+     catch(localError){
+       if(controller.signal.aborted)throw localError;
+       if(localError.message==="no-center"&&!/^(way|relation)$/.test(String((c.source||{}).osmType)))throw localError;
+       greenMessage("配信データを読み込めないため、外部の登録情報を検索中です…");
+       try{
+         var query=greenQuery(c,false);nearby=query.indexOf("around:")>=0;raw=await fetchGreenRaw(query,controller.signal);
+         if(!nearby&&!raw.elements.some(function(e){return e.type==="area"||(e.type===String((c.source||{}).osmType)&&String(e.id)===String((c.source||{}).osmId))})){nearby=true;raw=await fetchGreenRaw(greenQuery(c,true),controller.signal)}
+       }catch(areaError){
+         if(controller.signal.aborted||nearby||!greenPoint((c.source||{}).courseCenter))throw areaError;
+         nearby=true;raw=await fetchGreenRaw(greenQuery(c,true),controller.signal);
+       }
+     }
    }
    if(epoch!==greenEpoch||state.courseId!==c.id)return;
    greenData=parseGreenData(raw,nearby);renderGreenData();
    try{save(key,{at:cached&&raw===cached.raw?cached.at:Date.now(),raw:raw,nearby:nearby,courseSignature:JSON.stringify(c.source||{})})}catch(e){}
    greenMessage((nearby?"コース中心から2.5km以内の候補です。隣接コースを含む場合があります。 ":"")+"グリーン "+greenData.greens.length+"件・ホール経路 "+greenData.holes.length+"件。"+(greenData.greens.length?"候補をタップすると目安の中心まで測距します。番号の「推定」は経路終点との近さから付けています。":"グリーン情報がありません。航空写真をタップして目標を指定してください。"));
- }catch(e){if(epoch===greenEpoch)greenMessage(e.message==="no-center"?"このコースには位置情報がありません。検索からコースを登録してください。":"取得できませんでした。通信状態を確認して再度お試しください。航空写真のタップ測距は利用できます。")}
+ }catch(e){if(epoch===greenEpoch)greenMessage(e.message==="no-center"?"このコースには位置情報がありません。検索からコースを登録してください。":"配信データと外部検索の両方を利用できませんでした（"+(e.message||"通信エラー")+"）。時間を置いて再取得してください。航空写真のタップ測距は利用できます。")}
  finally{if(epoch===greenEpoch){greenRequest=null;$("loadGreens").disabled=false;$("refreshGreens").disabled=false}}
 }
 $("loadGreens").onclick=function(){loadGreenCandidates(false)};
@@ -530,3 +559,4 @@ resumeGps();
 <script src="./osm-import.js"></script>
 </body>
 </html>
+
