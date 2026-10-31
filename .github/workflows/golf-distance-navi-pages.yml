@@ -135,6 +135,9 @@ jobs:
           print("Golf course index entries:", len(final))
           PY
 
+      - name: Build local green and hole data
+        run: python golf-distance-navi/build-green-data.py
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
