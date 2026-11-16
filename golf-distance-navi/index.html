@@ -63,6 +63,8 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
 .greenSettings .field{margin-top:10px}.greenSettings .grid{margin-bottom:8px}
 /* High-contrast red for measured distance readouts. */
 #target,#shotDist{color:#c62828}
+.recordReminder{background:#fff1cf;color:#614100;padding:9px 10px;border-radius:9px;margin-bottom:8px;font-size:13px;font-weight:700;line-height:1.5}
+.recordReminder[hidden]{display:none!important}.needsRecord #finishShot{outline:3px solid #9b5000;outline-offset:2px;min-height:54px;font-size:17px}
 </style>
 </head>
 <body class="roundView">
@@ -150,10 +152,11 @@ body.roundView .app{padding-bottom:calc(90px + var(--bottom) + var(--shot-contro
 
 <section id="shotControls" class="shotControls" aria-label="ショット計測">
   <div class="shotSelection">
-    <div class="field"><label for="club">使用クラブ</label><select id="club"></select></div>
+    <div class="field"><label for="club">使用クラブ（選択で計測開始）</label><select id="club"></select></div>
     <details id="shotDetails"><summary id="shotDetailsLabel">詳細</summary><div class="field"><label for="shotType">ショット種別</label><select id="shotType"><option value="normal">通常</option><option value="miss">ミス</option><option value="half">ハーフ</option></select></div></details>
   </div>
-  <div id="shotReadout" class="shotReadout" hidden><div>ショット <strong id="shotDist">0</strong> <span id="shotUnit">yd</span></div><div id="shotState" role="status">打つ前に「ショット開始」を押してください。</div></div>
+  <div id="shotReadout" class="shotReadout" hidden><div>ショット <strong id="shotDist">0</strong> <span id="shotUnit">yd</span></div><div id="shotState" role="status">クラブを選ぶか「ショット開始」を押してください。</div></div>
+  <div id="recordReminder" class="recordReminder" role="status" hidden>計測中です。ボール地点なら下のボタンで記録してください。</div>
   <div class="shotButtons"><button id="startShot" class="btn">ショット開始</button><button id="finishShot" class="btn finish" hidden disabled>ボール位置で記録</button><button id="cancelShot" class="btn2" hidden disabled>中止</button></div>
 </section>
 
@@ -367,10 +370,12 @@ function drawLine(){
  if(state.current&&state.target)state.targetLine=L.polyline([[state.current.lat,state.current.lng],[state.target.lat,state.target.lng]],{weight:3,dashArray:"8 7"}).addTo(state.map);
 }
 function pos(p){
+ gpsUpdatedAt=Date.now();
  state.current={lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy};gpsStatus("GPS取得","ok");$("acc").textContent="精度 ±"+Math.round(p.coords.accuracy)+"m";drawCurrent();updateTarget();updateShot();
+ if(pendingClubShot&&!state.shotStart){startShot();toast($("club").value+" で計測を開始しました")}
  if(!state._gpsCentered&&state.map){state.map.setView([state.current.lat,state.current.lng],18);state._gpsCentered=true}
 }
-function geoErr(e){gpsStatus("GPSエラー","err");toast(e&&e.code===1?"位置情報を許可してください":"現在地を取得できません")}
+function geoErr(e){if(e&&e.code===1)pendingClubShot=false;gpsStatus("GPSエラー","err");toast(e&&e.code===1?"位置情報を許可してください":"現在地を取得できません")}
 function startGps(){if(!navigator.geolocation){gpsStatus("GPS非対応","err");return}if(state.watch!==null)navigator.geolocation.clearWatch(state.watch);gpsStatus("GPS検索中","warn");state.watch=navigator.geolocation.watchPosition(pos,geoErr,{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function shotKind(r){return r&&r.shotType?r.shotType:"normal"}
 function avgNums(a){return a.length?a.reduce(function(x,y){return x+y},0)/a.length:NaN}
@@ -409,7 +414,7 @@ function renderClubRecommendation(targetMeters){
 }
 function selectRecommendedClub(club){
  if(state.clubs.indexOf(club)<0){var option=document.createElement("option");option.value=club;option.textContent=club;$("club").appendChild(option)}
- $("club").value=club;toast(club+" を選択しました");
+ $("club").value=club;clubSelectedForShot();
 
 }
 function validPoint(p){return p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))}
@@ -480,10 +485,25 @@ function exportCourses(){if(!state.courses.length){toast("バックアップす�
 function importCoursesFile(file){var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result),a=Array.isArray(d)?d:d.courses;if(!Array.isArray(a))throw new Error();resetGreenCourse();state.courses=a.slice(0,300).map(function(c){return{id:String(c.id||("c"+Date.now()+Math.random())),name:String(c.name||"名称未設定").slice(0,80),source:c.source||{}}});save("gdn_courses",state.courses);state.courseId=state.courses[0]?state.courses[0].id:"";if(state.courseId)localStorage.setItem("gdn_course_id",state.courseId);renderCourseSelect();toast("コースデータを復元しました")}catch(e){toast("読み込めませんでした")}};r.readAsText(file)}
 
 function renderClubs(){$("club").innerHTML="";state.clubs.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c;$("club").appendChild(o)});$("clubEdit").value=state.clubs.join("\n")}
+var pendingClubShot=false,gpsUpdatedAt=0;
+function clearRecordReminder(){$("recordReminder").hidden=true;$("shotControls").classList.remove("needsRecord")}
+function remindShotRecording(){
+ if(!state.shotStart)return;
+ $("recordReminder").hidden=false;$("shotControls").classList.add("needsRecord");
+}
+function clubSelectedForShot(){
+ if(state.shotStart){toast($("club").value+" に変更しました。計測は継続しています");return}
+ if(!state.current||Date.now()-gpsUpdatedAt>15000){
+   pendingClubShot=true;$("shotState").textContent="現在地を取得して計測を開始します。";
+   toast("現在地を取得して計測を開始します");startGps();return;
+ }
+ startShot();toast($("club").value+" で計測を開始しました");
+}
+$("club").onchange=clubSelectedForShot;
 function updateShot(){var d=state.shotStart&&state.current?fmt(hav(state.shotStart,state.current)):0;$("shotUnit").textContent=ul();$("shotDist").textContent=d}
-function setShotMeasuringUi(message){$("shotReadout").hidden=false;$("startShot").hidden=true;$("finishShot").hidden=false;$("cancelShot").hidden=false;$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent=message;updateShot()}
-function startShot(){if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};state.shotAim=validPoint(state.target)?{lat:Number(state.target.lat),lng:Number(state.target.lng)}:null;setShotMeasuringUi("計測中です。ボール位置まで移動してください。")}
-function cancelShot(){$("shotReadout").hidden=true;$("startShot").hidden=false;$("finishShot").hidden=true;$("cancelShot").hidden=true;state.shotStart=null;state.shotAim=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="打つ前に「ショット開始」を押してください。";updateShot()}
+function setShotMeasuringUi(message){clearRecordReminder();$("shotReadout").hidden=false;$("startShot").hidden=true;$("finishShot").hidden=false;$("cancelShot").hidden=false;$("startShot").disabled=true;$("finishShot").disabled=false;$("cancelShot").disabled=false;$("shotState").textContent=message;updateShot()}
+function startShot(){pendingClubShot=false;if(!state.current){toast("先にGPSを取得してください");startGps();return}state.shotStart={lat:state.current.lat,lng:state.current.lng};state.shotAim=validPoint(state.target)?{lat:Number(state.target.lat),lng:Number(state.target.lng)}:null;setShotMeasuringUi("計測中です。ボール位置まで移動してください。")}
+function cancelShot(){pendingClubShot=false;clearRecordReminder();$("shotReadout").hidden=true;$("startShot").hidden=false;$("finishShot").hidden=true;$("cancelShot").hidden=true;state.shotStart=null;state.shotAim=null;$("startShot").disabled=false;$("finishShot").disabled=true;$("cancelShot").disabled=true;$("shotState").textContent="クラブを選ぶか「ショット開始」を押してください。";updateShot()}
 function finishShot(){
  if(!state.shotStart||!state.current)return;
  var m=hav(state.shotStart,state.current);
@@ -544,6 +564,7 @@ if("serviceWorker" in navigator&&window.isSecureContext)navigator.serviceWorker.
 var gpsResumeTimer=null;
 function resumeGps(){
  if(document.visibilityState!=="visible")return;
+ remindShotRecording();
  clearTimeout(gpsResumeTimer);
  gpsResumeTimer=setTimeout(function(){
    gpsResumeTimer=null;
